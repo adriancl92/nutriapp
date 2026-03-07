@@ -161,11 +161,16 @@ function createStore(init) {
   };
 }
 
+// Restore session from localStorage if available
+const _savedSession = (() => {
+  try { return JSON.parse(localStorage.getItem('nutripet_session') || 'null'); } catch { return null; }
+})();
+
 const petStore = createStore({
   loggedIn: false,
-  userId: null,
-  username: '',
-  emoji: '🐱',
+  userId: _savedSession?.userId || null,
+  username: _savedSession?.username || '',
+  emoji: _savedSession?.emoji || '🐱',
   health: 85,
   hunger: 70,
   energy: 80,
@@ -175,6 +180,8 @@ const petStore = createStore({
   feedAnim: false,
   totalFeedings: 0,
   goodFeedings: 0,
+  // flag to trigger auto-login on mount
+  _pendingRestore: !!_savedSession?.userId,
 });
 
 function usePetStore() {
@@ -1306,6 +1313,7 @@ function LoginScreen() {
         pet.health = Math.min(100, pet.health + elapsed * 0.005);
         pet.hunger = Math.max(0, pet.hunger - elapsed * 0.008);
       }
+      localStorage.setItem('nutripet_session', JSON.stringify({ userId: user.id, username: user.username, emoji: user.emoji }));
       petStore.setState({
         loggedIn: true,
         userId: user.id,
@@ -1319,6 +1327,7 @@ function LoginScreen() {
         lastFood: pet.last_food,
         totalFeedings: pet.total_feedings,
         goodFeedings: pet.good_feedings,
+        _pendingRestore: false,
       });
     } catch (e) {
       setErr('Error de conexión. Comprueba tu internet.');
@@ -1342,6 +1351,7 @@ function LoginScreen() {
     try {
       const user = await db.createUser(username.trim(), pwd.join(''), emoji);
       const pet = await db.createPet(user.id);
+      localStorage.setItem('nutripet_session', JSON.stringify({ userId: user.id, username: user.username, emoji: user.emoji }));
       petStore.setState({
         loggedIn: true,
         userId: user.id,
@@ -1355,6 +1365,7 @@ function LoginScreen() {
         lastFood: null,
         totalFeedings: 0,
         goodFeedings: 0,
+        _pendingRestore: false,
       });
     } catch (e) {
       if (e.message === 'USERNAME_TAKEN')
@@ -2206,6 +2217,47 @@ export default function NutriPet() {
   const saveTimer = useRef(null);
   const scanTimes = useRef<number[]>([]);
 
+  // Auto-restore session on page reload
+  useEffect(() => {
+    if (!pet._pendingRestore || !pet.userId) return;
+    async function restore() {
+      try {
+        let petData = await db.getPet(pet.userId);
+        if (!petData) petData = await db.createPet(pet.userId);
+        // Apply offline decay
+        const elapsed = Math.min(
+          Math.floor((Date.now() - new Date(petData.updated_at).getTime()) / 1000), 7200
+        );
+        if (!petData.sleeping) {
+          petData.health = Math.max(0, petData.health - elapsed * 0.015);
+          petData.hunger = Math.max(0, petData.hunger - elapsed * 0.02);
+          petData.energy = Math.max(0, petData.energy - elapsed * 0.012);
+        } else {
+          petData.energy = Math.min(100, petData.energy + elapsed * 0.025);
+          petData.health = Math.min(100, petData.health + elapsed * 0.005);
+          petData.hunger = Math.max(0, petData.hunger - elapsed * 0.008);
+        }
+        petStore.setState({
+          loggedIn: true,
+          health: petData.health,
+          hunger: petData.hunger,
+          energy: petData.energy,
+          sleeping: petData.sleeping,
+          mood: petData.mood,
+          lastFood: petData.last_food,
+          totalFeedings: petData.total_feedings,
+          goodFeedings: petData.good_feedings,
+          _pendingRestore: false,
+        });
+      } catch {
+        // If restore fails, clear session and show login
+        localStorage.removeItem('nutripet_session');
+        petStore.setState({ _pendingRestore: false, userId: null, username: '' });
+      }
+    }
+    restore();
+  }, [pet._pendingRestore, pet.userId]);
+
   // Load food log, achievements and accessories on login
   useEffect(() => {
     if (pet.loggedIn && pet.userId) {
@@ -2402,10 +2454,12 @@ export default function NutriPet() {
 
   function handleLogout() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    localStorage.removeItem('nutripet_session');
     petStore.setState({
       loggedIn: false, userId: null, username: '', emoji: '🐱',
       health: 85, hunger: 70, energy: 80, sleeping: false,
       mood: 'happy', lastFood: null, feedAnim: false, totalFeedings: 0, goodFeedings: 0,
+      _pendingRestore: false,
     });
     setFoodLog([]); setUnlockedAch([]); setEquippedAcc([]); setUnlockedAcc([]); setShowStatsScreen(false);
   }
@@ -2422,6 +2476,12 @@ export default function NutriPet() {
     await db.saveAccessories(pet.userId, newEquipped, unlockedAcc).catch(() => {});
   }
 
+  if (pet._pendingRestore) return (
+    <div style={{ minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', background:'linear-gradient(135deg,#fff0f5,#f0f4ff)', fontFamily:"'Nunito',sans-serif" }}>
+      <div style={{ fontSize:72, animation:'float 1.5s ease-in-out infinite' }}>🐱</div>
+      <p style={{ marginTop:16, fontSize:16, fontWeight:700, color:'#FF6B9D' }}>Cargando tu mascota...</p>
+    </div>
+  );
   if (!pet.loggedIn) return <LoginScreen />;
 
   const dark = pet.sleeping;
