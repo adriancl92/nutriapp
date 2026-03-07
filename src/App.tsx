@@ -163,7 +163,20 @@ function createStore(init) {
 
 // Restore session from localStorage if available
 const _savedSession = (() => {
-  try { return JSON.parse(localStorage.getItem('nutripet_session') || 'null'); } catch { return null; }
+  try {
+    const raw = localStorage.getItem('nutripet_session');
+    if (!raw) return null;
+    const s = JSON.parse(raw);
+    // Expire session after 30 days of no activity
+    const MAX_AGE = 30 * 24 * 3600 * 1000;
+    if (s.savedAt && Date.now() - s.savedAt > MAX_AGE) {
+      localStorage.removeItem('nutripet_session');
+    localStorage.removeItem('nutripet_state');
+      localStorage.removeItem('nutripet_state');
+      return null;
+    }
+    return s;
+  } catch { return null; }
 })();
 
 const petStore = createStore({
@@ -1313,7 +1326,7 @@ function LoginScreen() {
         pet.health = Math.min(100, pet.health + elapsed * 0.005);
         pet.hunger = Math.max(0, pet.hunger - elapsed * 0.008);
       }
-      localStorage.setItem('nutripet_session', JSON.stringify({ userId: user.id, username: user.username, emoji: user.emoji }));
+      localStorage.setItem('nutripet_session', JSON.stringify({ userId: user.id, username: user.username, emoji: user.emoji, savedAt: Date.now() }));
       petStore.setState({
         loggedIn: true,
         userId: user.id,
@@ -1351,7 +1364,7 @@ function LoginScreen() {
     try {
       const user = await db.createUser(username.trim(), pwd.join(''), emoji);
       const pet = await db.createPet(user.id);
-      localStorage.setItem('nutripet_session', JSON.stringify({ userId: user.id, username: user.username, emoji: user.emoji }));
+      localStorage.setItem('nutripet_session', JSON.stringify({ userId: user.id, username: user.username, emoji: user.emoji, savedAt: Date.now() }));
       petStore.setState({
         loggedIn: true,
         userId: user.id,
@@ -2222,37 +2235,67 @@ export default function NutriPet() {
     if (!pet._pendingRestore || !pet.userId) return;
     async function restore() {
       try {
-        let petData = await db.getPet(pet.userId);
-        if (!petData) petData = await db.createPet(pet.userId);
-        // Apply offline decay
-        const elapsed = Math.min(
-          Math.floor((Date.now() - new Date(petData.updated_at).getTime()) / 1000), 7200
-        );
-        if (!petData.sleeping) {
-          petData.health = Math.max(0, petData.health - elapsed * 0.015);
-          petData.hunger = Math.max(0, petData.hunger - elapsed * 0.02);
-          petData.energy = Math.max(0, petData.energy - elapsed * 0.012);
+        // Step 1: restore from localStorage immediately (no network needed)
+        let localState: any = null;
+        try {
+          const raw = localStorage.getItem('nutripet_state');
+          if (raw) localState = JSON.parse(raw);
+        } catch {}
+
+        if (localState) {
+          // Apply decay since last localStorage save
+          const elapsed = Math.min(Math.floor((Date.now() - localState.savedAt) / 1000), 7200);
+          let { health, hunger, energy, sleeping, mood, lastFood, totalFeedings, goodFeedings } = localState;
+          if (!sleeping) {
+            health = Math.max(0, health - elapsed * 0.015);
+            hunger = Math.max(0, hunger - elapsed * 0.05);
+            energy = Math.max(0, energy - elapsed * 0.03);
+            if (health < 20) mood = 'sick';
+            else if (energy < 25 || hunger < 20) mood = 'tired';
+            else mood = 'happy';
+          } else {
+            energy = Math.min(100, energy + elapsed * 0.025);
+            health = Math.min(100, health + elapsed * 0.005);
+            hunger = Math.max(0, hunger - elapsed * 0.008);
+          }
+          petStore.setState({ loggedIn: true, health, hunger, energy, sleeping, mood, lastFood, totalFeedings, goodFeedings, _pendingRestore: false });
+          // Step 2: sync Supabase in background to catch any cross-device changes
+          db.getPet(pet.userId).then(petData => {
+            if (!petData) return;
+            // Only use Supabase if it's more recent than localStorage
+            const supabaseTs = new Date(petData.updated_at).getTime();
+            if (supabaseTs > localState.savedAt) {
+              const elapsed2 = Math.min(Math.floor((Date.now() - supabaseTs) / 1000), 7200);
+              let h = petData.health, u = petData.hunger, e = petData.energy;
+              if (!petData.sleeping) {
+                h = Math.max(0, h - elapsed2 * 0.015);
+                u = Math.max(0, u - elapsed2 * 0.05);
+                e = Math.max(0, e - elapsed2 * 0.03);
+              }
+              petStore.setState({ health: h, hunger: u, energy: e, sleeping: petData.sleeping, mood: petData.mood, lastFood: petData.last_food, totalFeedings: petData.total_feedings, goodFeedings: petData.good_feedings });
+            }
+          }).catch(() => {});
         } else {
-          petData.energy = Math.min(100, petData.energy + elapsed * 0.025);
-          petData.health = Math.min(100, petData.health + elapsed * 0.005);
-          petData.hunger = Math.max(0, petData.hunger - elapsed * 0.008);
+          // No localStorage - fetch from Supabase
+          let petData = await db.getPet(pet.userId);
+          if (!petData) petData = await db.createPet(pet.userId);
+          const elapsed = Math.min(Math.floor((Date.now() - new Date(petData.updated_at).getTime()) / 1000), 7200);
+          let h = petData.health, u = petData.hunger, e = petData.energy;
+          if (!petData.sleeping) {
+            h = Math.max(0, h - elapsed * 0.015);
+            u = Math.max(0, u - elapsed * 0.05);
+            e = Math.max(0, e - elapsed * 0.03);
+          } else {
+            e = Math.min(100, e + elapsed * 0.025);
+            h = Math.min(100, h + elapsed * 0.005);
+            u = Math.max(0, u - elapsed * 0.008);
+          }
+          petStore.setState({ loggedIn: true, health: h, hunger: u, energy: e, sleeping: petData.sleeping, mood: petData.mood, lastFood: petData.last_food, totalFeedings: petData.total_feedings, goodFeedings: petData.good_feedings, _pendingRestore: false });
         }
-        petStore.setState({
-          loggedIn: true,
-          health: petData.health,
-          hunger: petData.hunger,
-          energy: petData.energy,
-          sleeping: petData.sleeping,
-          mood: petData.mood,
-          lastFood: petData.last_food,
-          totalFeedings: petData.total_feedings,
-          goodFeedings: petData.good_feedings,
-          _pendingRestore: false,
-        });
       } catch {
-        // If restore fails, clear session and show login
         localStorage.removeItem('nutripet_session');
-        petStore.setState({ _pendingRestore: false, userId: null, username: '' });
+        localStorage.removeItem('nutripet_state');
+        petStore.setState({ _pendingRestore: false, userId: null, username: '', loggedIn: false });
       }
     }
     restore();
@@ -2354,6 +2397,22 @@ export default function NutriPet() {
 
   // Debounced save to Supabase
   function scheduleSave(state) {
+    if (!state.userId) return;
+    // Always save to localStorage immediately (fast, no network)
+    try {
+      localStorage.setItem('nutripet_state', JSON.stringify({
+        health: state.health,
+        hunger: state.hunger,
+        energy: state.energy,
+        sleeping: state.sleeping,
+        mood: state.mood,
+        lastFood: state.lastFood,
+        totalFeedings: state.totalFeedings,
+        goodFeedings: state.goodFeedings,
+        savedAt: Date.now(),
+      }));
+    } catch {}
+    // Debounce Supabase save to max once every 10s
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       if (!state.userId) return;
@@ -2367,7 +2426,7 @@ export default function NutriPet() {
         total_feedings: state.totalFeedings,
         good_feedings: state.goodFeedings,
       }).catch(() => {});
-    }, 3000); // save every 3 seconds max
+    }, 10000);
   }
 
   // Time decay
