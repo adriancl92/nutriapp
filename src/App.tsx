@@ -478,6 +478,8 @@ function CameraScanner({ onDetected, onClose }) {
   const [status, setStatus] = useState<'loading'|'live'|'processing'|'error'>('loading');
   const [errMsg, setErrMsg] = useState('');
   const quaggaStarted = useRef(false);
+  const lastCode = useRef<string>('');
+  const codeCount = useRef<number>(0);
 
   useEffect(() => {
     let mounted = true;
@@ -495,15 +497,30 @@ function CameraScanner({ onDetected, onClose }) {
           target: containerRef.current,
           constraints: {
             facingMode: 'environment',
-            width: { min: 640, ideal: 1280 },
-            height: { min: 480, ideal: 720 },
+            // Alta resolución = más píxeles = mejor detección
+            width: { min: 1280, ideal: 1920 },
+            height: { min: 720, ideal: 1080 },
+          },
+          // Área de análisis recortada al centro (donde está el recuadro)
+          // Quagga solo analiza esta zona, más rápido y preciso
+          area: {
+            top: '25%',
+            right: '5%',
+            left: '5%',
+            bottom: '25%',
           },
         },
-        locator: { patchSize: 'medium', halfSample: true },
+        locator: {
+          patchSize: 'large',   // 'large' detecta mejor códigos algo alejados
+          halfSample: false,    // false = analiza píxeles reales, más preciso
+        },
         numOfWorkers: 0,
-        frequency: 5,
+        frequency: 10,          // más intentos por segundo
         decoder: {
-          readers: ['ean_reader','ean_8_reader','code_128_reader','upc_reader','upc_e_reader','code_39_reader'],
+          readers: ['ean_reader','ean_8_reader','code_128_reader','upc_reader','upc_e_reader'],
+          // Exigir que el código se detecte 2 veces seguidas antes de confirmar
+          // Elimina falsos positivos
+          multiple: false,
         },
         locate: true,
       }, (err: any) => {
@@ -519,11 +536,55 @@ function CameraScanner({ onDetected, onClose }) {
 
       Q.onDetected((result: any) => {
         const code = result?.codeResult?.code;
-        if (code && code.length >= 8) {
-          Q.stop();
-          quaggaStarted.current = false;
-          onDetected(code);
+        const confidence = result?.codeResult?.decodedCodes
+          ?.filter((c: any) => c.error !== undefined)
+          ?.reduce((acc: number, c: any) => acc + (1 - c.error), 0) ?? 0;
+
+        if (!code || code.length < 8) return;
+
+        // Verificación EAN-13: validar dígito de control
+        if (code.length === 13) {
+          const digits = code.split('').map(Number);
+          const check = digits.slice(0, 12).reduce((sum: number, d: number, i: number) =>
+            sum + d * (i % 2 === 0 ? 1 : 3), 0);
+          const expected = (10 - (check % 10)) % 10;
+          if (expected !== digits[12]) return; // código inválido, ignorar
         }
+
+        // Confirmación doble: el mismo código debe detectarse 2 veces seguidas
+        if (code === lastCode.current) {
+          codeCount.current++;
+        } else {
+          lastCode.current = code;
+          codeCount.current = 1;
+        }
+
+        // Necesita 2 detecciones consecutivas del mismo código
+        if (codeCount.current < 2) return;
+
+        Q.stop();
+        quaggaStarted.current = false;
+        lastCode.current = '';
+        codeCount.current = 0;
+
+        // Vibración
+        if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
+        // Beep sonoro
+        try {
+          const actx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const osc = actx.createOscillator();
+          const gain = actx.createGain();
+          osc.connect(gain); gain.connect(actx.destination);
+          osc.frequency.setValueAtTime(1200, actx.currentTime);
+          osc.frequency.exponentialRampToValueAtTime(900, actx.currentTime + 0.1);
+          gain.gain.setValueAtTime(0.3, actx.currentTime);
+          gain.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.2);
+          osc.start(actx.currentTime);
+          osc.stop(actx.currentTime + 0.2);
+        } catch {}
+        // Flash y delay antes de continuar
+        setStatus('detected' as any);
+        setTimeout(() => onDetected(code), 400);
       });
     }
 
@@ -580,10 +641,17 @@ function CameraScanner({ onDetected, onClose }) {
           #quagga-container canvas.drawingBuffer { opacity: 0.4; }
         `}</style>
 
+        {/* Detected flash */}
+        {(status as any) === 'detected' && (
+          <div style={{ position:'absolute', inset:0, background:'rgba(40,220,100,0.35)', zIndex:10, display:'flex', alignItems:'center', justifyContent:'center', animation:'flashGreen 0.4s ease' }}>
+            <div style={{ fontSize:72 }}>✅</div>
+          </div>
+        )}
+
         {/* Aiming overlay */}
-        {status === 'live' && (
+        {(status === 'live' || (status as any) === 'detected') && (
           <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
-            <div style={{ position:'relative', width:'82%', height:120, border:'3px solid #FF6B9D', borderRadius:12, boxShadow:'0 0 0 9999px rgba(0,0,0,0.5)', background:'transparent' }}>
+            <div style={{ position:'relative', width:'82%', height:120, border:`3px solid ${(status as any) === 'detected' ? '#28dc64' : '#FF6B9D'}`, borderRadius:12, boxShadow:`0 0 0 9999px rgba(0,0,0,0.5)`, background:'transparent', transition:'border-color 0.2s' }}>
               {/* Corners */}
               {([
                 {top:0,left:0,borderTop:'4px solid #FF6B9D',borderLeft:'4px solid #FF6B9D'},
@@ -645,6 +713,9 @@ function CameraScanner({ onDetected, onClose }) {
         @keyframes scanLine {
           0%, 100% { transform: translateY(-45px); opacity:0.3; }
           50% { transform: translateY(45px); opacity:1; }
+        }
+        @keyframes flashGreen {
+          0% { opacity:0; } 30% { opacity:1; } 100% { opacity:0; }
         }
       `}</style>
     </div>
@@ -1629,75 +1700,72 @@ function LoginScreen() {
 }
 
 // ─── FOOD LOG ─────────────────────────────────────────────────────────────────
-function FoodLog({ log }) {
+function FoodLog({ log, dark }: { log: any[], dark: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   if (!log.length) return null;
+  const shown = expanded ? log : log.slice(0, 3);
+  const scoreCount = { a:0, b:0, c:0, d:0, e:0, unknown:0 };
+  log.forEach(item => { const k = (item.score||'unknown').toLowerCase(); if (k in scoreCount) scoreCount[k as keyof typeof scoreCount]++; });
+  const healthy = (scoreCount.a + scoreCount.b);
+  const total = log.length;
+  const pct = total > 0 ? Math.round(healthy/total*100) : 0;
+
   return (
     <div style={{ marginTop: 16 }}>
-      <p
-        style={{
-          margin: '0 0 8px',
-          fontSize: 13,
-          fontWeight: 700,
-          color: '#aaa',
-        }}
-      >
-        Historial reciente
-      </p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {log.map((item, i) => {
+      {/* Header with summary */}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
+        <p style={{ margin:0, fontSize:13, fontWeight:800, color: dark ? '#5a7a9a' : '#aaa' }}>
+          🍽️ Historial reciente
+        </p>
+        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+          <div style={{ background: pct >= 60 ? '#d4edda' : pct >= 30 ? '#fffde0' : '#fde8e8', borderRadius:99, padding:'3px 10px', fontSize:11, fontWeight:800, color: pct >= 60 ? '#1a9641' : pct >= 30 ? '#ccb800' : '#d7191c' }}>
+            {pct}% sano
+          </div>
+          <span style={{ fontSize:11, color:'#bbb' }}>{total} comidas</span>
+        </div>
+      </div>
+
+      {/* Score summary bar */}
+      <div style={{ display:'flex', gap:4, marginBottom:10, height:6, borderRadius:99, overflow:'hidden' }}>
+        {(['a','b','c','d','e'] as const).map(k => {
+          const w = total > 0 ? (scoreCount[k]/total)*100 : 0;
+          return w > 0 ? <div key={k} style={{ width:`${w}%`, background:NC[k].color, transition:'width 0.5s' }}/> : null;
+        })}
+      </div>
+
+      {/* Items */}
+      <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+        {shown.map((item, i) => {
           const cfg = getNC(item.score);
+          const isNew = i === 0;
           return (
-            <div
-              key={i}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '8px 12px',
-                borderRadius: 12,
-                background: cfg.bg,
-              }}
-            >
-              <div
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 8,
-                  background: cfg.color,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 12,
-                  fontWeight: 800,
-                  color: 'white',
-                }}
-              >
+            <div key={i} style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 12px', borderRadius:14, background: dark ? 'rgba(255,255,255,0.05)' : cfg.bg, border: isNew ? `2px solid ${cfg.color}44` : '2px solid transparent', animation: isNew ? 'slideUp 0.3s ease' : 'none' }}>
+              <div style={{ width:32, height:32, borderRadius:10, background:cfg.color, display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:900, color:'white', flexShrink:0, boxShadow:`0 2px 8px ${cfg.color}55` }}>
                 {cfg.label}
               </div>
-              <p
-                style={{
-                  margin: 0,
-                  flex: 1,
-                  fontSize: 12,
-                  fontWeight: 700,
-                  color: '#444',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {item.product_name || item.name}
-              </p>
-              <span style={{ fontSize: 11, color: '#aaa' }}>
-                {new Date(item.eaten_at || item.time).toLocaleTimeString(
-                  'es-ES',
-                  { hour: '2-digit', minute: '2-digit' }
-                )}
-              </span>
+              <div style={{ flex:1, minWidth:0 }}>
+                <p style={{ margin:0, fontSize:12, fontWeight:700, color: dark ? '#ccc' : '#333', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                  {item.product_name || item.name}
+                </p>
+                {item.brand && <p style={{ margin:'2px 0 0', fontSize:10, color:'#aaa', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{item.brand}</p>}
+              </div>
+              <div style={{ textAlign:'right', flexShrink:0 }}>
+                <p style={{ margin:0, fontSize:10, color:'#bbb' }}>
+                  {new Date(item.eaten_at || item.time).toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit' })}
+                </p>
+                {isNew && <p style={{ margin:'2px 0 0', fontSize:9, fontWeight:800, color:cfg.color }}>NUEVO</p>}
+              </div>
             </div>
           );
         })}
       </div>
+
+      {/* Show more / less */}
+      {log.length > 3 && (
+        <button onClick={() => setExpanded(e => !e)} style={{ width:'100%', marginTop:8, padding:'8px 0', borderRadius:12, border:`1px solid ${dark ? '#333' : '#eee'}`, background:'transparent', color: dark ? '#5a7a9a' : '#aaa', fontSize:12, fontWeight:700, cursor:'pointer' }}>
+          {expanded ? '▲ Ver menos' : `▼ Ver ${log.length - 3} más`}
+        </button>
+      )}
     </div>
   );
 }
@@ -2225,7 +2293,7 @@ export default function NutriPet() {
           </div>
         )}
 
-        <FoodLog log={foodLog} />
+        <FoodLog log={foodLog} dark={dark} />
       </div>
 
       {/* FAB */}
