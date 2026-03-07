@@ -474,14 +474,14 @@ function NutriScoreBadge({ score, size = 'large' }) {
 
 // ─── CAMERA SCANNER ───────────────────────────────────────────────────────────
 function CameraScanner({ onDetected, onClose }) {
-  const canvasRef = useRef(null);
-  const imgRef = useRef(null);
-  const [status, setStatus] = useState<'idle'|'processing'|'error'|'success'>('idle');
-  const [preview, setPreview] = useState<string|null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream|null>(null);
+  const [status, setStatus] = useState<'starting'|'live'|'processing'|'error'>('starting');
   const [errMsg, setErrMsg] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [frozen, setFrozen] = useState<string|null>(null);
 
-  // Load ZXing on mount
+  // Load ZXing
   useEffect(() => {
     if (!(window as any).ZXing) {
       const s = document.createElement('script');
@@ -490,161 +490,212 @@ function CameraScanner({ onDetected, onClose }) {
     }
   }, []);
 
-  async function processImage(file: File) {
+  // Start camera
+  useEffect(() => {
+    let mounted = true;
+    async function start() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            // Ask for autofocus — key for close-up scanning
+            advanced: [{ focusMode: 'continuous' } as any],
+          },
+          audio: false,
+        });
+        if (!mounted) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        if (mounted) setStatus('live');
+      } catch {
+        if (mounted) {
+          setStatus('error');
+          setErrMsg('No se pudo acceder a la cámara. Ve a Ajustes → Safari → Cámara → Permitir.');
+        }
+      }
+    }
+    start();
+    return () => {
+      mounted = false;
+      streamRef.current?.getTracks().forEach(t => t.stop());
+    };
+  }, []);
+
+  async function captureAndAnalyze() {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    // Freeze frame
+    canvas.width = video.videoWidth || 1280;
+    canvas.height = video.videoHeight || 720;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+    setFrozen(dataUrl);
     setStatus('processing');
-    setErrMsg('');
 
-    // Show preview
-    const previewUrl = URL.createObjectURL(file);
-    setPreview(previewUrl);
-
-    // Give time for ZXing to load and image to render
-    await new Promise(r => setTimeout(r, 600));
-
-    // Method 1: Native BarcodeDetector (iOS 17+, Chrome)
+    // Try BarcodeDetector first (iOS 17+)
     try {
       if ((window as any).BarcodeDetector) {
         const formats = ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','pdf417','qr_code'];
         const detector = new (window as any).BarcodeDetector({ formats });
-        const img = imgRef.current;
-        if (img) {
-          const barcodes = await detector.detect(img);
-          if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-            setStatus('success');
-            onDetected(barcodes[0].rawValue);
-            return;
-          }
+        const barcodes = await detector.detect(canvas);
+        if (barcodes?.length > 0 && barcodes[0].rawValue) {
+          onDetected(barcodes[0].rawValue);
+          return;
         }
       }
-    } catch { /* try next method */ }
+    } catch { /* fallthrough */ }
 
-    // Method 2: ZXing on canvas
+    // ZXing fallback — wait a moment for it to load if needed
+    await new Promise(r => setTimeout(r, 300));
     try {
       const ZXing = (window as any).ZXing;
       if (ZXing) {
-        const img = new Image();
-        img.src = previewUrl;
-        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
-
-        const canvas = canvasRef.current as HTMLCanvasElement;
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
         const hints = new Map();
         hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-          ZXing.BarcodeFormat.EAN_13,
-          ZXing.BarcodeFormat.EAN_8,
-          ZXing.BarcodeFormat.CODE_128,
-          ZXing.BarcodeFormat.CODE_39,
-          ZXing.BarcodeFormat.UPC_A,
-          ZXing.BarcodeFormat.UPC_E,
+          ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+          ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
+          ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
         ]);
         hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-
         const reader = new ZXing.MultiFormatReader();
         reader.setHints(hints);
-        const luminance = new ZXing.RGBLuminanceSource(imageData.data, canvas.width, canvas.height);
-        const bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminance));
-        const result = reader.decode(bitmap);
-        if (result && result.getText()) {
-          setStatus('success');
+        const lum = new ZXing.RGBLuminanceSource(imageData.data, canvas.width, canvas.height);
+        const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+        const result = reader.decode(bmp);
+        if (result?.getText()) {
           onDetected(result.getText());
           return;
         }
       }
     } catch { /* not found */ }
 
-    // Nothing found
-    setStatus('error');
-    setErrMsg('No se detectó ningún código. Intenta acercarte más o con mejor luz.');
-    setPreview(null);
+    // Nothing found — unfreeze and let user retry
+    setFrozen(null);
+    setStatus('live');
+    setErrMsg('No detectado. Coloca el código dentro del recuadro e intenta de nuevo.');
   }
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (file) processImage(file);
-    // Reset input so same photo can be retried
-    e.target.value = '';
+  function handleClose() {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    onClose();
   }
 
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.92)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
-      <canvas ref={canvasRef} style={{ display:'none' }} />
-      <div style={{ width:'100%', maxWidth:380, background:'#111', borderRadius:28, overflow:'hidden' }}>
+    <div style={{ position:'fixed', inset:0, background:'#000', zIndex:200, display:'flex', flexDirection:'column' }}>
+      {/* Video / frozen frame */}
+      <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
+        {/* Live video */}
+        <video
+          ref={videoRef}
+          muted
+          playsInline
+          style={{ width:'100%', height:'100%', objectFit:'cover', display: frozen ? 'none' : 'block' }}
+        />
+        {/* Frozen frame while processing */}
+        {frozen && (
+          <img src={frozen} style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} alt="frame"/>
+        )}
+        <canvas ref={canvasRef} style={{ display:'none' }}/>
 
-        {/* Header */}
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 20px', background:'#1a1a1a' }}>
-          <span style={{ color:'white', fontWeight:800, fontSize:16 }}>📷 Escanear código</span>
-          <button onClick={onClose} style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', borderRadius:'50%', width:34, height:34, cursor:'pointer', fontSize:16 }}>✕</button>
+        {/* Aiming box overlay */}
+        {status !== 'error' && (
+          <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
+            {/* Dark overlay with hole */}
+            <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.45)' }}/>
+            <div style={{
+              position:'relative', width:'78%', height:110,
+              border:'3px solid #FF6B9D', borderRadius:12,
+              boxShadow:'0 0 0 9999px rgba(0,0,0,0.45)',
+              background:'transparent',
+            }}>
+              {/* Corner accents */}
+              {[{t:0,l:0,bt:'4px',bl:'4px',br:0,bb:0},{t:0,r:0,bt:'4px',br:'4px',bl:0,bb:0},{b:0,l:0,bb:'4px',bl:'4px',bt:0,br:0},{b:0,r:0,bb:'4px',br:'4px',bt:0,bl:0}].map((s,i)=>(
+                <div key={i} style={{ position:'absolute', width:22, height:22, ...Object.fromEntries(Object.entries(s).map(([k,v])=>[
+                  k==='t'?'top':k==='b'?'bottom':k==='l'?'left':k==='r'?'right':
+                  k==='bt'?'borderTop':k==='bb'?'borderBottom':k==='bl'?'borderLeft':'borderRight', v
+                ])), borderColor:'#FF6B9D', borderStyle:'solid' }}/>
+              ))}
+              {/* Scanning line animation */}
+              {status === 'live' && (
+                <div style={{ position:'absolute', left:0, right:0, height:2, background:'#FF6B9D', top:'50%', opacity:0.8,
+                  animation:'scanLine 1.5s ease-in-out infinite' }}/>
+              )}
+              {/* Processing spinner */}
+              {status === 'processing' && (
+                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
+                  <span style={{ fontSize:28 }}>🔍</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Top bar */}
+        <div style={{ position:'absolute', top:0, left:0, right:0, padding:'16px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', background:'linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)' }}>
+          <span style={{ color:'white', fontWeight:800, fontSize:15 }}>
+            {status === 'processing' ? '🔍 Analizando...' : status === 'error' ? '❌ Sin acceso' : '📷 Escanear código'}
+          </span>
+          <button onClick={handleClose} style={{ background:'rgba(255,255,255,0.15)', border:'none', color:'white', borderRadius:'50%', width:36, height:36, cursor:'pointer', fontSize:17, backdropFilter:'blur(4px)' }}>✕</button>
         </div>
 
-        <div style={{ padding:24 }}>
-          {/* Preview */}
-          {preview && (
-            <div style={{ marginBottom:16, borderRadius:16, overflow:'hidden', background:'#000', textAlign:'center' }}>
-              <img
-                ref={imgRef}
-                src={preview}
-                crossOrigin="anonymous"
-                style={{ maxWidth:'100%', maxHeight:200, objectFit:'contain', display:'block', margin:'0 auto' }}
-                alt="preview"
-              />
+        {/* Error / hint message */}
+        <div style={{ position:'absolute', bottom:100, left:20, right:20, textAlign:'center' }}>
+          {errMsg && (
+            <div style={{ background:'rgba(220,50,50,0.85)', borderRadius:12, padding:'10px 16px', marginBottom:8, backdropFilter:'blur(4px)' }}>
+              <p style={{ color:'white', fontSize:13, margin:0 }}>⚠️ {errMsg}</p>
             </div>
           )}
-
-          {/* Status message */}
-          {status === 'processing' && (
-            <div style={{ textAlign:'center', padding:'12px 0', marginBottom:16 }}>
-              <div style={{ fontSize:32, marginBottom:8 }}>🔍</div>
-              <p style={{ color:'#aaa', fontSize:14, margin:0 }}>Analizando imagen...</p>
-            </div>
+          {status === 'live' && !errMsg && (
+            <p style={{ color:'rgba(255,255,255,0.7)', fontSize:13, margin:0 }}>
+              Centra el código en el recuadro y pulsa el botón
+            </p>
           )}
-          {status === 'error' && (
-            <div style={{ background:'#2a1515', borderRadius:14, padding:14, marginBottom:16, textAlign:'center' }}>
-              <p style={{ color:'#ff6b6b', fontSize:13, margin:0, lineHeight:1.5 }}>⚠️ {errMsg}</p>
-            </div>
+          {status === 'starting' && (
+            <p style={{ color:'rgba(255,255,255,0.6)', fontSize:13, margin:0 }}>⏳ Iniciando cámara...</p>
           )}
-
-          {/* Main button - opens camera on iPhone */}
-          <input
-            ref={inputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={handleFileChange}
-            style={{ display:'none' }}
-          />
-          <button
-            onClick={() => inputRef.current?.click()}
-            disabled={status === 'processing'}
-            style={{
-              width:'100%', padding:'16px 0', borderRadius:18, border:'none',
-              background: status === 'processing' ? '#333' : 'linear-gradient(135deg,#FF6B9D,#A855F7)',
-              color:'white', fontSize:17, fontWeight:900, cursor: status === 'processing' ? 'default' : 'pointer',
-              boxShadow: status === 'processing' ? 'none' : '0 6px 20px rgba(255,107,157,0.4)',
-              marginBottom:12,
-            }}
-          >
-            {status === 'processing' ? '⏳ Procesando...' : status === 'error' ? '📷 Intentar otra vez' : '📷 Abrir cámara'}
-          </button>
-
-          {/* Instructions */}
-          <div style={{ background:'#1a1a1a', borderRadius:14, padding:14 }}>
-            <p style={{ color:'#666', fontSize:12, margin:'0 0 8px', fontWeight:700, textTransform:'uppercase', letterSpacing:1 }}>Cómo hacerlo</p>
-            {[
-              '📷 Pulsa "Abrir cámara"',
-              '🎯 Enfoca el código de barras',
-              '📸 Haz la foto',
-              '✅ ¡Listo! Se detecta solo',
-            ].map((tip, i) => (
-              <p key={i} style={{ color:'#888', fontSize:13, margin: i < 3 ? '0 0 6px' : 0 }}>{tip}</p>
-            ))}
-          </div>
         </div>
       </div>
+
+      {/* Bottom controls */}
+      <div style={{ background:'#111', padding:'20px 24px 36px', display:'flex', alignItems:'center', justifyContent:'center', gap:20 }}>
+        {status === 'error' ? (
+          <div style={{ textAlign:'center' }}>
+            <p style={{ color:'#ff6b6b', fontSize:13, margin:'0 0 12px' }}>{errMsg}</p>
+            <button onClick={handleClose} style={{ padding:'12px 28px', borderRadius:16, border:'none', background:'#FF6B9D', color:'white', fontWeight:800, cursor:'pointer' }}>Cerrar</button>
+          </div>
+        ) : (
+          <button
+            onClick={captureAndAnalyze}
+            disabled={status !== 'live'}
+            style={{
+              width:72, height:72, borderRadius:'50%', border:'4px solid white',
+              background: status === 'live' ? 'linear-gradient(135deg,#FF6B9D,#A855F7)' : '#333',
+              cursor: status === 'live' ? 'pointer' : 'default',
+              display:'flex', alignItems:'center', justifyContent:'center', fontSize:28,
+              boxShadow: status === 'live' ? '0 0 0 6px rgba(255,107,157,0.3)' : 'none',
+              transition:'all 0.2s',
+            }}
+          >
+            {status === 'processing' ? '⏳' : '📸'}
+          </button>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes scanLine {
+          0%, 100% { transform: translateY(-40px); opacity: 0.4; }
+          50% { transform: translateY(40px); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }
