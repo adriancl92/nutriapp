@@ -474,226 +474,177 @@ function NutriScoreBadge({ score, size = 'large' }) {
 
 // ─── CAMERA SCANNER ───────────────────────────────────────────────────────────
 function CameraScanner({ onDetected, onClose }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const streamRef = useRef<MediaStream|null>(null);
-  const [status, setStatus] = useState<'starting'|'live'|'processing'|'error'>('starting');
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [status, setStatus] = useState<'loading'|'live'|'processing'|'error'>('loading');
   const [errMsg, setErrMsg] = useState('');
-  const [frozen, setFrozen] = useState<string|null>(null);
+  const quaggaStarted = useRef(false);
 
-  // Load ZXing
-  useEffect(() => {
-    if (!(window as any).ZXing) {
-      const s = document.createElement('script');
-      s.src = 'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js';
-      document.head.appendChild(s);
-    }
-  }, []);
-
-  // Start camera
   useEffect(() => {
     let mounted = true;
-    async function start() {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: {
-            facingMode: { ideal: 'environment' },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            // Ask for autofocus — key for close-up scanning
-            advanced: [{ focusMode: 'continuous' } as any],
+
+    function startQuagga() {
+      const Q = (window as any).Quagga;
+      if (!Q || !containerRef.current) return;
+      if (quaggaStarted.current) return;
+      quaggaStarted.current = true;
+
+      Q.init({
+        inputStream: {
+          name: 'Live',
+          type: 'LiveStream',
+          target: containerRef.current,
+          constraints: {
+            facingMode: 'environment',
+            width: { min: 640, ideal: 1280 },
+            height: { min: 480, ideal: 720 },
           },
-          audio: false,
-        });
-        if (!mounted) { stream.getTracks().forEach(t => t.stop()); return; }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-        if (mounted) setStatus('live');
-      } catch {
-        if (mounted) {
+        },
+        locator: { patchSize: 'medium', halfSample: true },
+        numOfWorkers: 0,
+        frequency: 5,
+        decoder: {
+          readers: ['ean_reader','ean_8_reader','code_128_reader','upc_reader','upc_e_reader','code_39_reader'],
+        },
+        locate: true,
+      }, (err: any) => {
+        if (!mounted) return;
+        if (err) {
           setStatus('error');
-          setErrMsg('No se pudo acceder a la cámara. Ve a Ajustes → Safari → Cámara → Permitir.');
+          setErrMsg('No se pudo acceder a la cámara. Permite el acceso en Ajustes → Safari → Cámara.');
+          return;
         }
-      }
+        Q.start();
+        if (mounted) setStatus('live');
+      });
+
+      Q.onDetected((result: any) => {
+        const code = result?.codeResult?.code;
+        if (code && code.length >= 8) {
+          Q.stop();
+          quaggaStarted.current = false;
+          onDetected(code);
+        }
+      });
     }
-    start();
+
+    function loadQuagga() {
+      if ((window as any).Quagga) { startQuagga(); return; }
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js';
+      s.onload = () => { if (mounted) startQuagga(); };
+      s.onerror = () => { if (mounted) { setStatus('error'); setErrMsg('No se pudo cargar el escáner.'); } };
+      document.head.appendChild(s);
+    }
+
+    loadQuagga();
+
     return () => {
       mounted = false;
-      streamRef.current?.getTracks().forEach(t => t.stop());
+      if (quaggaStarted.current && (window as any).Quagga) {
+        try { (window as any).Quagga.stop(); } catch {}
+        quaggaStarted.current = false;
+      }
     };
   }, []);
 
-  async function captureAndAnalyze() {
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    if (!video || !canvas) return;
-
-    // Freeze frame
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(video, 0, 0);
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
-    setFrozen(dataUrl);
-    setStatus('processing');
-
-    // Try BarcodeDetector first (iOS 17+)
-    try {
-      if ((window as any).BarcodeDetector) {
-        const formats = ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','pdf417','qr_code'];
-        const detector = new (window as any).BarcodeDetector({ formats });
-        const barcodes = await detector.detect(canvas);
-        if (barcodes?.length > 0 && barcodes[0].rawValue) {
-          onDetected(barcodes[0].rawValue);
-          return;
-        }
-      }
-    } catch { /* fallthrough */ }
-
-    // ZXing fallback — wait a moment for it to load if needed
-    await new Promise(r => setTimeout(r, 300));
-    try {
-      const ZXing = (window as any).ZXing;
-      if (ZXing) {
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const hints = new Map();
-        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
-          ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
-          ZXing.BarcodeFormat.CODE_128, ZXing.BarcodeFormat.CODE_39,
-          ZXing.BarcodeFormat.UPC_A, ZXing.BarcodeFormat.UPC_E,
-        ]);
-        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
-        const reader = new ZXing.MultiFormatReader();
-        reader.setHints(hints);
-        const lum = new ZXing.RGBLuminanceSource(imageData.data, canvas.width, canvas.height);
-        const bmp = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
-        const result = reader.decode(bmp);
-        if (result?.getText()) {
-          onDetected(result.getText());
-          return;
-        }
-      }
-    } catch { /* not found */ }
-
-    // Nothing found — unfreeze and let user retry
-    setFrozen(null);
-    setStatus('live');
-    setErrMsg('No detectado. Coloca el código dentro del recuadro e intenta de nuevo.');
-  }
-
   function handleClose() {
-    streamRef.current?.getTracks().forEach(t => t.stop());
+    if (quaggaStarted.current && (window as any).Quagga) {
+      try { (window as any).Quagga.stop(); } catch {}
+      quaggaStarted.current = false;
+    }
     onClose();
   }
 
   return (
     <div style={{ position:'fixed', inset:0, background:'#000', zIndex:200, display:'flex', flexDirection:'column' }}>
-      {/* Video / frozen frame */}
-      <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
-        {/* Live video */}
-        <video
-          ref={videoRef}
-          muted
-          playsInline
-          style={{ width:'100%', height:'100%', objectFit:'cover', display: frozen ? 'none' : 'block' }}
-        />
-        {/* Frozen frame while processing */}
-        {frozen && (
-          <img src={frozen} style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} alt="frame"/>
-        )}
-        <canvas ref={canvasRef} style={{ display:'none' }}/>
 
-        {/* Aiming box overlay */}
-        {status !== 'error' && (
+      {/* Camera viewport */}
+      <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
+
+        {/* Quagga mounts video here */}
+        <div
+          id="quagga-container"
+          ref={containerRef}
+          style={{ width:'100%', height:'100%' }}
+        />
+
+        {/* Quagga injects a <video> and <canvas> — style them */}
+        <style>{`
+          #quagga-container video, #quagga-container canvas.drawingBuffer {
+            position: absolute !important;
+            top: 0; left: 0;
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover;
+          }
+          #quagga-container canvas.drawingBuffer { opacity: 0.4; }
+        `}</style>
+
+        {/* Aiming overlay */}
+        {status === 'live' && (
           <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
-            {/* Dark overlay with hole */}
-            <div style={{ position:'absolute', inset:0, background:'rgba(0,0,0,0.45)' }}/>
-            <div style={{
-              position:'relative', width:'78%', height:110,
-              border:'3px solid #FF6B9D', borderRadius:12,
-              boxShadow:'0 0 0 9999px rgba(0,0,0,0.45)',
-              background:'transparent',
-            }}>
-              {/* Corner accents */}
-              {[{t:0,l:0,bt:'4px',bl:'4px',br:0,bb:0},{t:0,r:0,bt:'4px',br:'4px',bl:0,bb:0},{b:0,l:0,bb:'4px',bl:'4px',bt:0,br:0},{b:0,r:0,bb:'4px',br:'4px',bt:0,bl:0}].map((s,i)=>(
-                <div key={i} style={{ position:'absolute', width:22, height:22, ...Object.fromEntries(Object.entries(s).map(([k,v])=>[
-                  k==='t'?'top':k==='b'?'bottom':k==='l'?'left':k==='r'?'right':
-                  k==='bt'?'borderTop':k==='bb'?'borderBottom':k==='bl'?'borderLeft':'borderRight', v
-                ])), borderColor:'#FF6B9D', borderStyle:'solid' }}/>
+            <div style={{ position:'relative', width:'82%', height:120, border:'3px solid #FF6B9D', borderRadius:12, boxShadow:'0 0 0 9999px rgba(0,0,0,0.5)', background:'transparent' }}>
+              {/* Corners */}
+              {([
+                {top:0,left:0,borderTop:'4px solid #FF6B9D',borderLeft:'4px solid #FF6B9D'},
+                {top:0,right:0,borderTop:'4px solid #FF6B9D',borderRight:'4px solid #FF6B9D'},
+                {bottom:0,left:0,borderBottom:'4px solid #FF6B9D',borderLeft:'4px solid #FF6B9D'},
+                {bottom:0,right:0,borderBottom:'4px solid #FF6B9D',borderRight:'4px solid #FF6B9D'},
+              ] as any[]).map((s,i) => (
+                <div key={i} style={{ position:'absolute', width:22, height:22, ...s }}/>
               ))}
-              {/* Scanning line animation */}
-              {status === 'live' && (
-                <div style={{ position:'absolute', left:0, right:0, height:2, background:'#FF6B9D', top:'50%', opacity:0.8,
-                  animation:'scanLine 1.5s ease-in-out infinite' }}/>
-              )}
-              {/* Processing spinner */}
-              {status === 'processing' && (
-                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center' }}>
-                  <span style={{ fontSize:28 }}>🔍</span>
-                </div>
-              )}
+              {/* Scan line */}
+              <div style={{ position:'absolute', left:4, right:4, height:2, background:'linear-gradient(90deg,transparent,#FF6B9D,transparent)', top:'50%', animation:'scanLine 1.8s ease-in-out infinite' }}/>
+            </div>
+          </div>
+        )}
+
+        {/* Loading spinner */}
+        {status === 'loading' && (
+          <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', background:'#000' }}>
+            <div style={{ textAlign:'center' }}>
+              <div style={{ fontSize:40, marginBottom:12 }}>📷</div>
+              <p style={{ color:'#aaa', fontSize:14, margin:0 }}>Iniciando cámara...</p>
             </div>
           </div>
         )}
 
         {/* Top bar */}
-        <div style={{ position:'absolute', top:0, left:0, right:0, padding:'16px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', background:'linear-gradient(to bottom, rgba(0,0,0,0.7), transparent)' }}>
+        <div style={{ position:'absolute', top:0, left:0, right:0, padding:'16px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', background:'linear-gradient(to bottom,rgba(0,0,0,0.65),transparent)', pointerEvents:'none' }}>
           <span style={{ color:'white', fontWeight:800, fontSize:15 }}>
-            {status === 'processing' ? '🔍 Analizando...' : status === 'error' ? '❌ Sin acceso' : '📷 Escanear código'}
+            {status === 'live' ? '🔍 Buscando código...' : status === 'loading' ? '⏳ Cargando...' : '❌ Error'}
           </span>
-          <button onClick={handleClose} style={{ background:'rgba(255,255,255,0.15)', border:'none', color:'white', borderRadius:'50%', width:36, height:36, cursor:'pointer', fontSize:17, backdropFilter:'blur(4px)' }}>✕</button>
         </div>
 
-        {/* Error / hint message */}
-        <div style={{ position:'absolute', bottom:100, left:20, right:20, textAlign:'center' }}>
-          {errMsg && (
-            <div style={{ background:'rgba(220,50,50,0.85)', borderRadius:12, padding:'10px 16px', marginBottom:8, backdropFilter:'blur(4px)' }}>
-              <p style={{ color:'white', fontSize:13, margin:0 }}>⚠️ {errMsg}</p>
-            </div>
-          )}
-          {status === 'live' && !errMsg && (
-            <p style={{ color:'rgba(255,255,255,0.7)', fontSize:13, margin:0 }}>
-              Centra el código en el recuadro y pulsa el botón
+        {/* Hint */}
+        {status === 'live' && (
+          <div style={{ position:'absolute', bottom:20, left:20, right:20, textAlign:'center', pointerEvents:'none' }}>
+            <p style={{ color:'rgba(255,255,255,0.75)', fontSize:13, margin:0, textShadow:'0 1px 4px rgba(0,0,0,0.8)' }}>
+              Centra el código de barras en el recuadro
             </p>
-          )}
-          {status === 'starting' && (
-            <p style={{ color:'rgba(255,255,255,0.6)', fontSize:13, margin:0 }}>⏳ Iniciando cámara...</p>
-          )}
-        </div>
+          </div>
+        )}
       </div>
 
-      {/* Bottom controls */}
-      <div style={{ background:'#111', padding:'20px 24px 36px', display:'flex', alignItems:'center', justifyContent:'center', gap:20 }}>
+      {/* Bottom bar */}
+      <div style={{ background:'#111', padding:'18px 24px 36px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
         {status === 'error' ? (
-          <div style={{ textAlign:'center' }}>
-            <p style={{ color:'#ff6b6b', fontSize:13, margin:'0 0 12px' }}>{errMsg}</p>
+          <div style={{ width:'100%', textAlign:'center' }}>
+            <p style={{ color:'#ff6b6b', fontSize:13, margin:'0 0 12px', lineHeight:1.5 }}>{errMsg}</p>
             <button onClick={handleClose} style={{ padding:'12px 28px', borderRadius:16, border:'none', background:'#FF6B9D', color:'white', fontWeight:800, cursor:'pointer' }}>Cerrar</button>
           </div>
         ) : (
-          <button
-            onClick={captureAndAnalyze}
-            disabled={status !== 'live'}
-            style={{
-              width:72, height:72, borderRadius:'50%', border:'4px solid white',
-              background: status === 'live' ? 'linear-gradient(135deg,#FF6B9D,#A855F7)' : '#333',
-              cursor: status === 'live' ? 'pointer' : 'default',
-              display:'flex', alignItems:'center', justifyContent:'center', fontSize:28,
-              boxShadow: status === 'live' ? '0 0 0 6px rgba(255,107,157,0.3)' : 'none',
-              transition:'all 0.2s',
-            }}
-          >
-            {status === 'processing' ? '⏳' : '📸'}
-          </button>
+          <>
+            <p style={{ color:'#555', fontSize:12, margin:0, flex:1 }}>Detección automática</p>
+            <button onClick={handleClose} style={{ padding:'12px 20px', borderRadius:16, border:'2px solid #333', background:'transparent', color:'#aaa', fontWeight:700, cursor:'pointer', fontSize:14 }}>Cancelar</button>
+          </>
         )}
       </div>
 
       <style>{`
         @keyframes scanLine {
-          0%, 100% { transform: translateY(-40px); opacity: 0.4; }
-          50% { transform: translateY(40px); opacity: 1; }
+          0%, 100% { transform: translateY(-45px); opacity:0.3; }
+          50% { transform: translateY(45px); opacity:1; }
         }
       `}</style>
     </div>
