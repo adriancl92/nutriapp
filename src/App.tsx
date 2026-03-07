@@ -489,7 +489,7 @@ function CameraScanner({ onDetected, onClose }) {
         scanner
           .start(
             { facingMode: 'environment' },
-            { fps: 10, qrbox: { width: 260, height: 140 } },
+            { fps: 2, qrbox: { width: 280, height: 130 }, aspectRatio: 1.5, formatsToSupport: [0, 4, 5, 8, 9, 11, 12, 13, 14] },
             (code) => {
               stop();
               onDetected(code);
