@@ -474,159 +474,163 @@ function NutriScoreBadge({ score, size = 'large' }) {
 
 // ─── CAMERA SCANNER ───────────────────────────────────────────────────────────
 function CameraScanner({ onDetected, onClose }) {
-  const scannerRef = useRef(null);
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const rafRef = useRef(null);
+  const detectorRef = useRef(null);
   const [err, setErr] = useState('');
   const [ready, setReady] = useState(false);
+  const [hint, setHint] = useState('Iniciando cámara...');
 
   useEffect(() => {
     let mounted = true;
-    function start() {
-      if (!mounted) return;
-      setReady(true);
+
+    async function startNative() {
+      // Try native BarcodeDetector API (iOS 17+, Chrome Android, desktop Chrome)
       try {
-        const scanner = new window.Html5Qrcode('qr-reader-box');
-        scannerRef.current = scanner;
-        scanner
-          .start(
-            { facingMode: 'environment' },
-            { fps: 2, qrbox: { width: 280, height: 130 }, aspectRatio: 1.5, formatsToSupport: [0, 4, 5, 8, 9, 11, 12, 13, 14] },
-            (code) => {
-              stop();
-              onDetected(code);
-            },
-            () => {}
-          )
-          .catch(() => {
-            if (mounted)
-              setErr(
-                'No se pudo acceder a la cámara. Da permiso en el navegador.'
-              );
-          });
+        const formats = ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','pdf417','data_matrix','qr_code'];
+        const supported = await (window as any).BarcodeDetector.getSupportedFormats().catch(() => formats);
+        detectorRef.current = new (window as any).BarcodeDetector({ formats: supported.length ? supported : formats });
+      } catch {
+        detectorRef.current = null;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        if (!mounted) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        if (mounted) { setReady(true); setHint('Apunta al código de barras 🛒'); }
+        scanLoop();
       } catch (e) {
-        if (mounted) setErr('Error: ' + e.message);
+        if (mounted) setErr('No se pudo acceder a la cámara. Abre Ajustes > Safari > Cámara y permite el acceso.');
       }
     }
+
+    function scanLoop() {
+      if (!mounted) return;
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas || video.readyState < 2) {
+        rafRef.current = requestAnimationFrame(scanLoop);
+        return;
+      }
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0);
+
+      // Method 1: Native BarcodeDetector
+      if (detectorRef.current) {
+        detectorRef.current.detect(canvas).then((barcodes) => {
+          if (!mounted) return;
+          if (barcodes && barcodes.length > 0) {
+            const code = barcodes[0].rawValue;
+            if (code) { stop(); onDetected(code); return; }
+          }
+          rafRef.current = setTimeout(() => requestAnimationFrame(scanLoop), 300);
+        }).catch(() => {
+          rafRef.current = setTimeout(() => requestAnimationFrame(scanLoop), 300);
+        });
+      } else {
+        // Method 2: ZXing via CDN as fallback
+        if ((window as any).ZXing) {
+          tryZXing(canvas, ctx);
+        } else {
+          rafRef.current = setTimeout(() => requestAnimationFrame(scanLoop), 300);
+        }
+      }
+    }
+
+    function tryZXing(canvas, ctx) {
+      if (!mounted) return;
+      try {
+        const hints = new (window as any).ZXing.Map();
+        const formats = [
+          (window as any).ZXing.BarcodeFormat.EAN_13,
+          (window as any).ZXing.BarcodeFormat.EAN_8,
+          (window as any).ZXing.BarcodeFormat.CODE_128,
+          (window as any).ZXing.BarcodeFormat.UPC_A,
+        ];
+        hints.set((window as any).ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
+        const reader = new (window as any).ZXing.MultiFormatReader();
+        reader.setHints(hints);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const luminance = new (window as any).ZXing.RGBLuminanceSource(imageData.data, canvas.width, canvas.height);
+        const bitmap = new (window as any).ZXing.BinaryBitmap(new (window as any).ZXing.HybridBinarizer(luminance));
+        const result = reader.decode(bitmap);
+        if (result && result.getText()) { stop(); onDetected(result.getText()); return; }
+      } catch { /* not detected yet */ }
+      rafRef.current = setTimeout(() => requestAnimationFrame(scanLoop), 300);
+    }
+
     function stop() {
-      if (scannerRef.current) {
-        scannerRef.current.stop().catch(() => {});
-        scannerRef.current = null;
-      }
+      mounted = false;
+      if (rafRef.current) { clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
+      if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     }
-    if (window.Html5Qrcode) {
-      start();
-    } else {
+
+    // Load ZXing as fallback
+    if (!(window as any).ZXing) {
       const s = document.createElement('script');
-      s.src =
-        'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js';
-      s.onload = start;
-      s.onerror = () => {
-        if (mounted) setErr('No se pudo cargar el escáner.');
-      };
+      s.src = 'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js';
       document.head.appendChild(s);
     }
-    return () => {
-      mounted = false;
-      stop();
-    };
+
+    startNative();
+    return () => { mounted = false; stop(); };
   }, []);
 
   function handleClose() {
-    if (scannerRef.current) {
-      scannerRef.current.stop().catch(() => {});
-      scannerRef.current = null;
-    }
+    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); }
+    if (rafRef.current) { clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
     onClose();
   }
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: 'rgba(0,0,0,0.9)',
-        zIndex: 200,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 20,
-      }}
-    >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 380,
-          background: '#111',
-          borderRadius: 28,
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '16px 20px',
-            background: '#1a1a1a',
-          }}
-        >
-          <span style={{ color: 'white', fontWeight: 800, fontSize: 16 }}>
-            📷 Escanea el código de barras
-          </span>
-          <button
-            onClick={handleClose}
-            style={{
-              background: 'rgba(255,255,255,0.1)',
-              border: 'none',
-              color: 'white',
-              borderRadius: '50%',
-              width: 34,
-              height: 34,
-              cursor: 'pointer',
-              fontSize: 16,
-            }}
-          >
-            ✕
-          </button>
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.95)', zIndex:200, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:20 }}>
+      <div style={{ width:'100%', maxWidth:400, background:'#111', borderRadius:28, overflow:'hidden' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 20px', background:'#1a1a1a' }}>
+          <span style={{ color:'white', fontWeight:800, fontSize:16 }}>📷 Escanea el código de barras</span>
+          <button onClick={handleClose} style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', borderRadius:'50%', width:34, height:34, cursor:'pointer', fontSize:16 }}>✕</button>
         </div>
         {err ? (
-          <div style={{ padding: 30, textAlign: 'center' }}>
-            <p style={{ color: '#ff6b6b', margin: '0 0 16px', fontSize: 14 }}>
-              {err}
-            </p>
-            <button
-              onClick={handleClose}
-              style={{
-                padding: '10px 24px',
-                borderRadius: 12,
-                background: '#FF6B9D',
-                border: 'none',
-                color: 'white',
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              Cerrar
-            </button>
+          <div style={{ padding:30, textAlign:'center' }}>
+            <p style={{ color:'#ff6b6b', margin:'0 0 16px', fontSize:14, lineHeight:1.5 }}>{err}</p>
+            <button onClick={handleClose} style={{ padding:'10px 24px', borderRadius:12, background:'#FF6B9D', border:'none', color:'white', fontWeight:700, cursor:'pointer' }}>Cerrar</button>
           </div>
         ) : (
           <>
-            <div id="qr-reader-box" style={{ width: '100%' }} />
-            {!ready && (
-              <div
-                style={{
-                  padding: 24,
-                  textAlign: 'center',
-                  color: '#888',
-                  fontSize: 14,
-                }}
-              >
-                ⏳ Iniciando cámara...
-              </div>
-            )}
-            <div style={{ padding: '12px 20px 20px', textAlign: 'center' }}>
-              <p style={{ color: '#666', fontSize: 13, margin: 0 }}>
-                Apunta al código de barras del producto 🛒
+            <div style={{ position:'relative', background:'#000' }}>
+              <video
+                ref={videoRef}
+                muted
+                playsInline
+                style={{ width:'100%', maxHeight:280, display:'block', objectFit:'cover' }}
+              />
+              <canvas ref={canvasRef} style={{ display:'none' }} />
+              {/* Aiming overlay */}
+              {ready && (
+                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
+                  <div style={{ width:260, height:100, border:'3px solid #FF6B9D', borderRadius:8, boxShadow:'0 0 0 2000px rgba(0,0,0,0.4)' }}>
+                    <div style={{ position:'absolute', top:0, left:0, width:20, height:20, borderTop:'4px solid #FF6B9D', borderLeft:'4px solid #FF6B9D', borderRadius:'4px 0 0 0' }} />
+                    <div style={{ position:'absolute', top:0, right:0, width:20, height:20, borderTop:'4px solid #FF6B9D', borderRight:'4px solid #FF6B9D', borderRadius:'0 4px 0 0' }} />
+                    <div style={{ position:'absolute', bottom:0, left:0, width:20, height:20, borderBottom:'4px solid #FF6B9D', borderLeft:'4px solid #FF6B9D', borderRadius:'0 0 0 4px' }} />
+                    <div style={{ position:'absolute', bottom:0, right:0, width:20, height:20, borderBottom:'4px solid #FF6B9D', borderRight:'4px solid #FF6B9D', borderRadius:'0 0 4px 0' }} />
+                  </div>
+                </div>
+              )}
+            </div>
+            <div style={{ padding:'14px 20px 20px', textAlign:'center' }}>
+              <p style={{ color: ready ? '#aaa' : '#666', fontSize:13, margin:0 }}>
+                {ready ? '🔍 ' : '⏳ '}{hint}
               </p>
             </div>
           </>
