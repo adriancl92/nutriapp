@@ -243,7 +243,7 @@ const NC = {
 const getNC = (s) => NC[(s || '').toLowerCase()] || NC.unknown;
 
 // ─── PET FACE ─────────────────────────────────────────────────────────────────
-function PetFace({ mood, sleeping, health, feedAnim }) {
+function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:string, sleeping:boolean, health:number, feedAnim:boolean, equipped?:string[] }) {
   const sick = mood === 'sick' || health < 20;
   const tired = mood === 'tired' || health < 40;
   const body = sick ? '#c0c0c0' : health > 60 ? '#FFB3C6' : '#f0c0a0';
@@ -397,6 +397,75 @@ function PetFace({ mood, sleeping, health, feedAnim }) {
             animation: sleeping ? 'none' : 'wag 1.5s ease-in-out infinite',
           }}
         />
+        {/* ── SVG ACCESSORIES ── */}
+        {equipped.includes('hat_star') && <>
+          <ellipse cx="80" cy="32" rx="28" ry="8" fill="#4a90d9" opacity="0.9"/>
+          <polygon points="80,0 88,24 72,24" fill="#FFD700"/>
+          <polygon points="65,10 70,28 60,28" fill="#FFD700"/>
+          <polygon points="95,10 100,28 90,28" fill="#FFD700"/>
+        </>}
+        {equipped.includes('hat_crown') && <>
+          <ellipse cx="80" cy="35" rx="30" ry="7" fill="#8B4513"/>
+          <rect x="52" y="10" width="56" height="26" rx="4" fill="#DAA520"/>
+          <polygon points="52,10 62,0 72,10" fill="#DAA520"/>
+          <polygon points="74,10 80,0 86,10" fill="#DAA520"/>
+          <polygon points="96,10 106,0 116,10" fill="#DAA520"/>
+          <ellipse cx="62" cy="16" rx="4" ry="4" fill="#ff4444"/>
+          <ellipse cx="80" cy="14" rx="4" ry="4" fill="#44aaff"/>
+          <ellipse cx="98" cy="16" rx="4" ry="4" fill="#44ff44"/>
+        </>}
+        {equipped.includes('hat_party') && <>
+          <ellipse cx="80" cy="35" rx="26" ry="7" fill="#FF6B9D" opacity="0.8"/>
+          <polygon points="80,2 96,36 64,36" fill="#FF6B9D"/>
+          <polygon points="80,2 90,36 70,36" fill="#A855F7"/>
+          <circle cx="80" cy="2" r="4" fill="#FFD700"/>
+          <circle cx="68" cy="15" r="2" fill="#FFD700"/>
+          <circle cx="92" cy="15" r="2" fill="#FFD700"/>
+          <circle cx="75" cy="25" r="2" fill="white"/>
+          <circle cx="85" cy="20" r="2" fill="white"/>
+        </>}
+        {equipped.includes('hat_wizard') && <>
+          <ellipse cx="80" cy="36" rx="30" ry="8" fill="#4a0080" opacity="0.9"/>
+          <polygon points="80,0 98,38 62,38" fill="#6600cc"/>
+          <ellipse cx="72" cy="20" rx="4" ry="4" fill="#FFD700" opacity="0.7"/>
+          <ellipse cx="85" cy="28" rx="3" ry="3" fill="#FFD700" opacity="0.7"/>
+          <text x="76" y="26" fontSize="10" fill="#FFD700">✦</text>
+        </>}
+        {equipped.includes('glasses_cool') && <>
+          <rect x="50" y="67" width="22" height="14" rx="7" fill="#1a1a1a" opacity="0.85"/>
+          <rect x="88" y="67" width="22" height="14" rx="7" fill="#1a1a1a" opacity="0.85"/>
+          <line x1="72" y1="74" x2="88" y2="74" stroke="#1a1a1a" strokeWidth="2.5"/>
+          <line x1="38" y1="74" x2="50" y2="74" stroke="#1a1a1a" strokeWidth="2"/>
+          <line x1="110" y1="74" x2="122" y2="74" stroke="#1a1a1a" strokeWidth="2"/>
+          <ellipse cx="61" cy="74" rx="8" ry="5" fill="#3399ff" opacity="0.4"/>
+          <ellipse cx="99" cy="74" rx="8" ry="5" fill="#3399ff" opacity="0.4"/>
+        </>}
+        {equipped.includes('glasses_heart') && <>
+          <path d="M50 74 Q50 66 58 66 Q65 66 65 72 Q65 66 72 66 Q80 66 80 74 Q80 82 65 88 Q50 82 50 74 Z" fill="#ff6699" opacity="0.85"/>
+          <path d="M88 74 Q88 66 96 66 Q103 66 103 72 Q103 66 110 66 Q118 66 118 74 Q118 82 103 88 Q88 82 88 74 Z" fill="#ff6699" opacity="0.85"/>
+          <line x1="80" y1="74" x2="88" y2="74" stroke="#ff6699" strokeWidth="2.5"/>
+          <line x1="38" y1="74" x2="50" y2="74" stroke="#ff6699" strokeWidth="2"/>
+          <line x1="118" y1="74" x2="130" y2="74" stroke="#ff6699" strokeWidth="2"/>
+        </>}
+        {equipped.includes('cape_hero') && <>
+          <path d="M30 100 Q20 130 35 150 Q80 160 125 150 Q140 130 130 100" fill="#cc0000" opacity="0.85"/>
+          <path d="M30 100 Q50 120 80 115 Q110 120 130 100" fill="#ff3333" opacity="0.6"/>
+          <text x="68" y="138" fontSize="18" fill="#FFD700">★</text>
+        </>}
+        {equipped.includes('cape_rainbow') && <>
+          <path d="M30 100 Q20 135 35 155 Q80 165 125 155 Q140 135 130 100" fill="url(#rainbowGrad)" opacity="0.8"/>
+          <defs><linearGradient id="rainbowGrad" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stopColor="#ff0000"/><stop offset="25%" stopColor="#ffff00"/><stop offset="50%" stopColor="#00ff00"/><stop offset="75%" stopColor="#0000ff"/><stop offset="100%" stopColor="#ff00ff"/></linearGradient></defs>
+        </>}
+        {equipped.includes('badge_fire') && <>
+          <circle cx="118" cy="105" r="12" fill="#ff6600"/>
+          <text x="111" y="110" fontSize="14">🔥</text>
+        </>}
+        {equipped.includes('badge_moon') && <>
+          <circle cx="118" cy="105" r="12" fill="#1a1a3e"/>
+          <path d="M113 100 Q110 106 113 112 Q120 115 125 110 Q118 112 116 106 Q118 100 113 100 Z" fill="#FFD700"/>
+          <circle cx="122" cy="102" r="1.5" fill="white"/>
+          <circle cx="120" cy="108" r="1" fill="white"/>
+        </>}
       </svg>
       {sleeping && (
         <div style={{ position: 'absolute', top: 0, right: -10 }}>
@@ -1926,145 +1995,194 @@ function AccessoriesScreen({ unlocked, equipped, onEquip, onClose, dark }: { unl
   );
 }
 
-// ─── PARENT MODE SCREEN ────────────────────────────────────────────────────────
-function ParentScreen({ userId, username, totalFeedings, goodFeedings, onClose }: { userId: string, username: string, totalFeedings: number, goodFeedings: number, onClose: () => void }) {
-  const [pin, setPin] = useState('');
-  const [auth, setAuth] = useState(false);
+// ─── STATS SCREEN ─────────────────────────────────────────────────────────────
+function StatsScreen({ userId, username, totalFeedings, goodFeedings, onClose, dark }: {
+  userId: string, username: string, totalFeedings: number, goodFeedings: number, onClose: () => void, dark: boolean
+}) {
   const [weekData, setWeekData] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
-  const PARENT_PIN = '1234'; // PIN fijo por ahora
+  const [healthHistory, setHealthHistory] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  async function loadWeekData() {
-    setLoading(true);
-    try {
-      const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
-      const res = await fetch(`${SUPA_URL}/rest/v1/food_log?user_id=eq.${userId}&eaten_at=gte.${since}&order=eaten_at.asc`, { headers: db.headers });
-      const data = await res.json();
-      // Group by day
-      const days: Record<string, any[]> = {};
-      data.forEach((item: any) => {
-        const day = new Date(item.eaten_at).toLocaleDateString('es-ES', { weekday:'short', day:'numeric' });
-        if (!days[day]) days[day] = [];
-        days[day].push(item);
-      });
-      setWeekData(Object.entries(days).map(([day, items]) => ({ day, items })));
-    } catch {}
-    setLoading(false);
-  }
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      try {
+        const since = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+        const res = await fetch(
+          `${SUPA_URL}/rest/v1/food_log?user_id=eq.${userId}&eaten_at=gte.${since}&order=eaten_at.asc`,
+          { headers: db.headers }
+        );
+        const data = await res.json();
 
-  function handlePin(d: string) {
-    const next = pin + d;
-    setPin(next);
-    if (next.length === 4) {
-      if (next === PARENT_PIN) { setAuth(true); loadWeekData(); }
-      else { setTimeout(() => setPin(''), 400); }
+        // Group by day label
+        const days: Record<string, any[]> = {};
+        data.forEach((item: any) => {
+          const d = new Date(item.eaten_at);
+          const label = d.toLocaleDateString('es-ES', { weekday:'short', day:'numeric' });
+          if (!days[label]) days[label] = [];
+          days[label].push(item);
+        });
+        setWeekData(Object.entries(days).map(([day, items]) => ({ day, items })));
+
+        // Simulate health history from food log: each scan shifts health by score delta
+        const NC_DELTA: Record<string, number> = { a:14, b:8, c:1, d:-6, e:-16, unknown:-2 };
+        let h = 80;
+        const hist: any[] = [{ label: 'Inicio', value: h }];
+        data.forEach((item: any) => {
+          const s = (item.score || 'unknown').toLowerCase();
+          h = Math.max(0, Math.min(100, h + (NC_DELTA[s] || 0)));
+          const label = new Date(item.eaten_at).toLocaleDateString('es-ES', { day:'numeric', month:'short' });
+          hist.push({ label, value: Math.round(h) });
+        });
+        // Keep max 14 points for readability
+        const step = Math.max(1, Math.floor(hist.length / 14));
+        setHealthHistory(hist.filter((_, i) => i % step === 0 || i === hist.length - 1));
+      } catch {}
+      setLoading(false);
     }
-  }
+    load();
+  }, [userId]);
 
   const pct = totalFeedings > 0 ? Math.round(goodFeedings / totalFeedings * 100) : 0;
-  const scoreColors: Record<string, string> = { a:'#1a9641', b:'#a6d96a', c:'#ccb800', d:'#fdae61', e:'#d7191c', unknown:'#ccc' };
+  const scoreColors: Record<string, string> = { a:'#1a9641', b:'#a6d96a', c:'#ccb800', d:'#fdae61', e:'#d7191c', unknown:'#ddd' };
+  const bg = dark ? '#0f0c29' : '#f4f4f8';
+  const card = dark ? 'rgba(255,255,255,0.06)' : 'white';
+  const txt = dark ? '#eee' : '#333';
+  const sub = dark ? '#5a7a9a' : '#aaa';
 
-  if (!auth) return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.85)', zIndex:160, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
-      <div style={{ background:'white', borderRadius:28, padding:28, width:'100%', maxWidth:320, textAlign:'center' }}>
-        <div style={{ fontSize:48, marginBottom:8 }}>👨‍👩‍👧</div>
-        <h3 style={{ margin:'0 0 4px', fontSize:20, fontWeight:900 }}>Modo Padres</h3>
-        <p style={{ margin:'0 0 20px', fontSize:13, color:'#aaa' }}>Introduce el PIN (defecto: 1234)</p>
-        <div style={{ display:'flex', justifyContent:'center', gap:10, marginBottom:20 }}>
-          {[0,1,2,3].map(i => (
-            <div key={i} style={{ width:16, height:16, borderRadius:'50%', background: pin.length > i ? '#FF6B9D' : '#eee', transition:'background 0.2s' }}/>
-          ))}
-        </div>
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:16 }}>
-          {[1,2,3,4,5,6,7,8,9,'',0,'⌫'].map((d,i) => (
-            <button key={i} onClick={() => d === '⌫' ? setPin(p => p.slice(0,-1)) : d !== '' && handlePin(String(d))}
-              style={{ padding:'14px 0', borderRadius:14, border:'2px solid #f0f0f0', background: d==='' ? 'transparent' : 'white', fontSize:20, fontWeight:800, cursor: d==='' ? 'default' : 'pointer', color:'#333' }}>
-              {d}
-            </button>
-          ))}
-        </div>
-        {pin.length === 4 && pin !== PARENT_PIN && (
-          <p style={{ color:'#e05', fontSize:13, margin:'0 0 10px' }}>PIN incorrecto</p>
-        )}
-        <button onClick={onClose} style={{ background:'none', border:'none', color:'#aaa', fontSize:13, cursor:'pointer' }}>Cancelar</button>
-      </div>
-    </div>
-  );
+  const maxBarItems = Math.max(...weekData.map(d => d.items.length), 1);
+  const maxHealth = 100;
 
   return (
-    <div style={{ position:'fixed', inset:0, background:'#f8f8f8', zIndex:160, overflowY:'auto', padding:'20px 16px 40px', fontFamily:"'Nunito',sans-serif" }}>
-      <div style={{ maxWidth:400, margin:'0 auto' }}>
+    <div style={{ position:'fixed', inset:0, background:bg, zIndex:160, overflowY:'auto', padding:'20px 16px 48px', fontFamily:"'Nunito',sans-serif" }}>
+      <div style={{ maxWidth:420, margin:'0 auto' }}>
+
+        {/* Header */}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
           <div>
-            <h2 style={{ margin:0, fontSize:22, fontWeight:900, color:'#333' }}>👨‍👩‍👧 Modo Padres</h2>
-            <p style={{ margin:'2px 0 0', fontSize:13, color:'#aaa' }}>Estadísticas de {username}</p>
+            <h2 style={{ margin:0, fontSize:22, fontWeight:900, color:txt }}>📊 Estadísticas</h2>
+            <p style={{ margin:'2px 0 0', fontSize:13, color:sub }}>{username} · {totalFeedings} escaneos totales</p>
           </div>
-          <button onClick={onClose} style={{ background:'#f0f0f0', border:'none', borderRadius:'50%', width:38, height:38, cursor:'pointer', fontSize:18 }}>✕</button>
+          <button onClick={onClose} style={{ background: dark ? 'rgba(255,255,255,0.1)' : '#f0f0f0', border:'none', borderRadius:'50%', width:38, height:38, cursor:'pointer', fontSize:18 }}>✕</button>
         </div>
 
-        {/* Summary cards */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:16 }}>
+        {/* Summary pills */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:10, marginBottom:20 }}>
           {[
-            { label:'Total', value: totalFeedings, icon:'🍽️', color:'#667eea' },
-            { label:'Sanas', value: goodFeedings, icon:'💚', color:'#1a9641' },
-            { label:'% Sano', value: `${pct}%`, icon:'🌟', color: pct>=60?'#1a9641':pct>=30?'#ccb800':'#d7191c' },
+            { icon:'🍽️', label:'Total', value: totalFeedings, color:'#667eea' },
+            { icon:'💚', label:'Sanas', value: goodFeedings, color:'#1a9641' },
+            { icon:'🌟', label:'% Sano', value:`${pct}%`, color: pct>=60?'#1a9641':pct>=30?'#ccb800':'#d7191c' },
           ].map(c => (
-            <div key={c.label} style={{ background:'white', borderRadius:16, padding:'12px 10px', textAlign:'center', boxShadow:'0 2px 8px rgba(0,0,0,0.06)' }}>
-              <p style={{ margin:0, fontSize:22 }}>{c.icon}</p>
-              <p style={{ margin:'4px 0 0', fontSize:22, fontWeight:900, color:c.color }}>{c.value}</p>
-              <p style={{ margin:0, fontSize:11, color:'#aaa' }}>{c.label}</p>
+            <div key={c.label} style={{ background:card, borderRadius:16, padding:'12px 8px', textAlign:'center', boxShadow: dark?'none':'0 2px 8px rgba(0,0,0,0.06)' }}>
+              <p style={{ margin:0, fontSize:20 }}>{c.icon}</p>
+              <p style={{ margin:'4px 0 0', fontSize:20, fontWeight:900, color:c.color }}>{c.value}</p>
+              <p style={{ margin:0, fontSize:11, color:sub }}>{c.label}</p>
             </div>
           ))}
         </div>
 
-        {/* Weekly chart */}
-        <div style={{ background:'white', borderRadius:20, padding:20, marginBottom:16, boxShadow:'0 2px 8px rgba(0,0,0,0.06)' }}>
-          <p style={{ margin:'0 0 14px', fontSize:14, fontWeight:800, color:'#333' }}>📊 Últimos 7 días</p>
-          {loading ? (
-            <p style={{ textAlign:'center', color:'#aaa', fontSize:13 }}>Cargando...</p>
-          ) : weekData.length === 0 ? (
-            <p style={{ textAlign:'center', color:'#aaa', fontSize:13 }}>Sin datos esta semana</p>
-          ) : (
-            <div style={{ display:'flex', gap:8, alignItems:'flex-end', height:120 }}>
-              {weekData.map(({ day, items }) => {
-                const max = Math.max(...weekData.map(d => d.items.length), 1);
-                const h = Math.max((items.length / max) * 100, 8);
-                const scores = items.map((i: any) => i.score || 'unknown');
-                return (
-                  <div key={day} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
-                    <div style={{ width:'100%', height:h, borderRadius:8, overflow:'hidden', display:'flex', flexDirection:'column-reverse' }}>
-                      {(['a','b','c','d','e','unknown'] as const).map(s => {
-                        const cnt = scores.filter((x: string) => x === s).length;
-                        if (!cnt) return null;
-                        return <div key={s} style={{ width:'100%', flex:cnt, background:scoreColors[s] }}/>;
-                      })}
-                    </div>
-                    <p style={{ margin:0, fontSize:9, color:'#aaa', textAlign:'center' }}>{day}</p>
-                    <p style={{ margin:0, fontSize:10, fontWeight:800, color:'#555' }}>{items.length}</p>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-          {/* Legend */}
-          <div style={{ display:'flex', gap:8, flexWrap:'wrap', marginTop:12 }}>
-            {(['a','b','c','d','e'] as const).map(s => (
-              <div key={s} style={{ display:'flex', alignItems:'center', gap:4 }}>
-                <div style={{ width:10, height:10, borderRadius:2, background:scoreColors[s] }}/>
-                <span style={{ fontSize:10, color:'#aaa' }}>{s.toUpperCase()}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        {loading ? (
+          <p style={{ textAlign:'center', color:sub, fontSize:13, marginTop:40 }}>Cargando datos...</p>
+        ) : (<>
 
-        {/* Health tip */}
-        <div style={{ background: pct>=60 ? '#f0fff4' : pct>=30 ? '#fffde0' : '#fde8e8', borderRadius:16, padding:16 }}>
-          <p style={{ margin:0, fontSize:13, fontWeight:700, color: pct>=60 ? '#1a9641' : pct>=30 ? '#8B6914' : '#c0392b', lineHeight:1.5 }}>
-            {pct >= 60 ? `✅ ¡${username} tiene muy buenos hábitos alimenticios! Más del 60% de sus comidas son saludables.`
-            : pct >= 30 ? `⚠️ ${username} puede mejorar. Intenta introducir más frutas, verduras y productos con Nutri-Score A o B.`
-            : `❌ La alimentación de ${username} necesita atención. Habla con él/ella sobre la importancia de comer sano.`}
-          </p>
-        </div>
+          {/* ── Chart 1: Barras por día ── */}
+          <div style={{ background:card, borderRadius:20, padding:20, marginBottom:16, boxShadow: dark?'none':'0 2px 8px rgba(0,0,0,0.06)' }}>
+            <p style={{ margin:'0 0 4px', fontSize:14, fontWeight:800, color:txt }}>🗓️ Escaneos por día</p>
+            <p style={{ margin:'0 0 16px', fontSize:11, color:sub }}>Últimos 7 días · colores por Nutri-Score</p>
+            {weekData.length === 0 ? (
+              <p style={{ color:sub, fontSize:13, textAlign:'center' }}>Sin datos esta semana</p>
+            ) : (
+              <div style={{ display:'flex', gap:6, alignItems:'flex-end', height:140 }}>
+                {weekData.map(({ day, items }) => {
+                  const barH = Math.max((items.length / maxBarItems) * 120, 6);
+                  const scoreCounts: Record<string, number> = {};
+                  items.forEach((i: any) => { const s = (i.score||'unknown').toLowerCase(); scoreCounts[s] = (scoreCounts[s]||0)+1; });
+                  return (
+                    <div key={day} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:4 }}>
+                      <div style={{ width:'100%', height:barH, borderRadius:8, overflow:'hidden', display:'flex', flexDirection:'column-reverse' }}>
+                        {(['a','b','c','d','e','unknown'] as const).map(s => {
+                          const cnt = scoreCounts[s] || 0;
+                          if (!cnt) return null;
+                          return <div key={s} style={{ width:'100%', flex:cnt, background:scoreColors[s] }}/>;
+                        })}
+                      </div>
+                      <p style={{ margin:0, fontSize:9, color:sub, textAlign:'center', lineHeight:1.2 }}>{day}</p>
+                      <p style={{ margin:0, fontSize:10, fontWeight:800, color:txt }}>{items.length}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            {/* Legend */}
+            <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginTop:14 }}>
+              {(['a','b','c','d','e'] as const).map(s => (
+                <div key={s} style={{ display:'flex', alignItems:'center', gap:4 }}>
+                  <div style={{ width:10, height:10, borderRadius:3, background:scoreColors[s] }}/>
+                  <span style={{ fontSize:10, color:sub }}>Nutri-{s.toUpperCase()}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ── Chart 2: Evolución de salud ── */}
+          <div style={{ background:card, borderRadius:20, padding:20, marginBottom:16, boxShadow: dark?'none':'0 2px 8px rgba(0,0,0,0.06)' }}>
+            <p style={{ margin:'0 0 4px', fontSize:14, fontWeight:800, color:txt }}>💖 Evolución de salud</p>
+            <p style={{ margin:'0 0 16px', fontSize:11, color:sub }}>Estimación basada en lo que comió la mascota</p>
+            {healthHistory.length < 2 ? (
+              <p style={{ color:sub, fontSize:13, textAlign:'center' }}>Necesitas más escaneos para ver la evolución</p>
+            ) : (() => {
+              const W = 360, H = 120, PAD = 20;
+              const xs = healthHistory.map((_, i) => PAD + (i / (healthHistory.length - 1)) * (W - PAD * 2));
+              const ys = healthHistory.map(p => PAD + ((maxHealth - p.value) / maxHealth) * (H - PAD * 2));
+              const line = xs.map((x, i) => `${i === 0 ? 'M' : 'L'}${x},${ys[i]}`).join(' ');
+              const area = `${line} L${xs[xs.length-1]},${H} L${xs[0]},${H} Z`;
+              const lastVal = healthHistory[healthHistory.length-1].value;
+              const lineColor = lastVal >= 60 ? '#1a9641' : lastVal >= 30 ? '#ccb800' : '#d7191c';
+              return (
+                <div style={{ overflowX:'auto' }}>
+                  <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ minWidth:260 }}>
+                    <defs>
+                      <linearGradient id="healthGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={lineColor} stopOpacity="0.3"/>
+                        <stop offset="100%" stopColor={lineColor} stopOpacity="0.02"/>
+                      </linearGradient>
+                    </defs>
+                    {/* Grid lines */}
+                    {[25, 50, 75, 100].map(v => {
+                      const y = PAD + ((maxHealth - v) / maxHealth) * (H - PAD * 2);
+                      return <g key={v}>
+                        <line x1={PAD} y1={y} x2={W-PAD} y2={y} stroke={dark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.06)'} strokeWidth="1"/>
+                        <text x={PAD-4} y={y+4} fontSize="8" fill={sub} textAnchor="end">{v}</text>
+                      </g>;
+                    })}
+                    {/* Area */}
+                    <path d={area} fill="url(#healthGrad)"/>
+                    {/* Line */}
+                    <path d={line} fill="none" stroke={lineColor} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+                    {/* Dots */}
+                    {xs.map((x, i) => (
+                      <circle key={i} cx={x} cy={ys[i]} r="3.5" fill={lineColor} stroke={dark?'#1a1a2e':'white'} strokeWidth="1.5"/>
+                    ))}
+                    {/* Last value label */}
+                    <text x={xs[xs.length-1]} y={ys[ys.length-1]-8} fontSize="10" fill={lineColor} textAnchor="middle" fontWeight="800">{lastVal}%</text>
+                  </svg>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Health tip */}
+          <div style={{ background: pct>=60 ? (dark?'rgba(26,150,65,0.15)':'#f0fff4') : pct>=30 ? (dark?'rgba(204,184,0,0.1)':'#fffde0') : (dark?'rgba(215,25,28,0.1)':'#fde8e8'), borderRadius:16, padding:16 }}>
+            <p style={{ margin:0, fontSize:13, fontWeight:700, color: pct>=60?'#1a9641':pct>=30?'#a07800':'#c0392b', lineHeight:1.6 }}>
+              {pct >= 60
+                ? `✅ ¡${username} tiene muy buenos hábitos! Más del 60% de sus comidas son saludables.`
+                : pct >= 30
+                ? `⚠️ ${username} puede mejorar. Intenta escanear más productos con Nutri-Score A o B.`
+                : `❌ La alimentación de ${username} necesita atención. ¡Dale alimentos más sanos a la mascota!`}
+            </p>
+          </div>
+
+        </>)}
       </div>
     </div>
   );
@@ -2082,7 +2200,7 @@ export default function NutriPet() {
   const [newAch, setNewAch] = useState<any>(null);
   const [showAchievements, setShowAchievements] = useState(false);
   const [showAccessories, setShowAccessories] = useState(false);
-  const [showParent, setShowParent] = useState(false);
+  const [showStatsScreen, setShowStatsScreen] = useState(false);
   const [equippedAcc, setEquippedAcc] = useState<string[]>([]);
   const [unlockedAcc, setUnlockedAcc] = useState<string[]>([]);
   const saveTimer = useRef(null);
@@ -2107,43 +2225,78 @@ export default function NutriPet() {
     if (!pet.userId) return;
     const already = new Set(unlockedAch);
     const toUnlock: string[] = [];
+    // scores ordered newest-first (log comes from DB ordered desc)
     const scores = log.map((i: any) => (i.score || 'unknown').toLowerCase());
+    const ns = newScore.toLowerCase(); // the score just scanned RIGHT NOW
 
-    if (!already.has('first_scan') && log.length >= 1) toUnlock.push('first_scan');
-    if (!already.has('first_healthy') && scores.some(s => s === 'a')) toUnlock.push('first_healthy');
-    if (!already.has('scan_10') && log.length >= 10) toUnlock.push('scan_10');
-    if (!already.has('scan_50') && log.length >= 50) toUnlock.push('scan_50');
-    if (!already.has('explorer') && new Set(log.map((i: any) => i.barcode)).size >= 5) toUnlock.push('explorer');
-    if (!already.has('all_scores') && ['a','b','c','d','e'].every(s => scores.includes(s))) toUnlock.push('all_scores');
-    if (!already.has('pet_max') && state.health >= 99 && state.hunger >= 99 && state.energy >= 99) toUnlock.push('pet_max');
-    // 5 healthy in a row
-    if (!already.has('healthy_5') && scores.slice(0,5).every(s => s === 'a' || s === 'b') && scores.length >= 5) toUnlock.push('healthy_5');
-    // Perfect day: all today's scans are A
-    const today = new Date().toDateString();
-    const todayScores = log.filter((i: any) => new Date(i.eaten_at).toDateString() === today).map((i: any) => i.score?.toLowerCase());
-    if (!already.has('perfect_day') && todayScores.length >= 3 && todayScores.every(s => s === 'a')) toUnlock.push('perfect_day');
-    // Night owl
-    if (!already.has('night_owl') && new Date().getHours() >= 21) toUnlock.push('night_owl');
+    // ── Basados en el escaneo actual ──────────────────────────────
+    if (!already.has('first_scan'))
+      toUnlock.push('first_scan'); // siempre se cumple en el primer escaneo
+
+    if (!already.has('first_healthy') && ns === 'a')
+      toUnlock.push('first_healthy'); // solo si ESTE escaneo es A
+
+    if (!already.has('night_owl') && new Date().getHours() >= 21)
+      toUnlock.push('night_owl');
+
     // Speed scan: 3 scans in 60s
     const now = Date.now();
     scanTimes.current = [...scanTimes.current.filter(t => now - t < 60000), now];
-    if (!already.has('speed_scan') && scanTimes.current.length >= 3) toUnlock.push('speed_scan');
+    if (!already.has('speed_scan') && scanTimes.current.length >= 3)
+      toUnlock.push('speed_scan');
 
+    // ── Basados en el historial acumulado ─────────────────────────
+    if (!already.has('scan_10') && log.length >= 10)
+      toUnlock.push('scan_10');
+    if (!already.has('scan_50') && log.length >= 50)
+      toUnlock.push('scan_50');
+
+    if (!already.has('explorer') && new Set(log.map((i: any) => i.barcode).filter(Boolean)).size >= 5)
+      toUnlock.push('explorer');
+
+    if (!already.has('all_scores') && ['a','b','c','d','e'].every(s => scores.includes(s)))
+      toUnlock.push('all_scores');
+
+    // 5 comidas sanas CONSECUTIVAS (las 5 más recientes)
+    if (!already.has('healthy_5') && scores.length >= 5 &&
+        scores.slice(0, 5).every(s => s === 'a' || s === 'b'))
+      toUnlock.push('healthy_5');
+
+    // Día perfecto: mínimo 3 escaneos hoy y TODOS son A
+    const today = new Date().toDateString();
+    const todayScores = log
+      .filter((i: any) => new Date(i.eaten_at).toDateString() === today)
+      .map((i: any) => (i.score || 'unknown').toLowerCase());
+    if (!already.has('perfect_day') && todayScores.length >= 3 &&
+        todayScores.every(s => s === 'a'))
+      toUnlock.push('perfect_day');
+
+    // Mascota al máximo (tras aplicar el efecto del alimento)
+    if (!already.has('pet_max') &&
+        state.health >= 99 && state.hunger >= 99 && state.energy >= 99)
+      toUnlock.push('pet_max');
+
+    // ── Procesar desbloqueos ──────────────────────────────────────
+    // Acumulamos unlocked locales para no depender del state async
+    let localUnlocked = [...unlockedAch];
     for (const id of toUnlock) {
+      if (localUnlocked.includes(id)) continue; // ya tenemos este
       await db.unlockAchievement(pet.userId, id).catch(() => {});
-      const ach = ACHIEVEMENTS.find(a => a.id === id);
-      if (ach) {
-        setUnlockedAch(prev => [...prev, id]);
-        // Unlock accessories tied to this achievement
-        const accToUnlock = Object.entries(ACCESSORIES).filter(([,v]) => v.unlockId === id).map(([k]) => k);
-        if (accToUnlock.length > 0) {
-          const newUnlocked = [...unlockedAcc, ...accToUnlock];
-          setUnlockedAcc(newUnlocked);
-          await db.saveAccessories(pet.userId, equippedAcc, newUnlocked).catch(() => {});
-        }
-        setNewAch(ach);
-        break; // show one at a time
+      localUnlocked = [...localUnlocked, id];
+      setUnlockedAch(localUnlocked);
+
+      // Desbloquear accesorio asociado
+      const accToUnlock = Object.entries(ACCESSORIES)
+        .filter(([, v]) => v.unlockId === id)
+        .map(([k]) => k);
+      if (accToUnlock.length > 0) {
+        const newUnlocked = [...unlockedAcc, ...accToUnlock.filter(a => !unlockedAcc.includes(a))];
+        setUnlockedAcc(newUnlocked);
+        await db.saveAccessories(pet.userId, equippedAcc, newUnlocked).catch(() => {});
       }
+
+      const ach = ACHIEVEMENTS.find(a => a.id === id);
+      if (ach) { setNewAch(ach); break; } // mostrar uno a la vez
     }
   }
 
@@ -2254,7 +2407,7 @@ export default function NutriPet() {
       health: 85, hunger: 70, energy: 80, sleeping: false,
       mood: 'happy', lastFood: null, feedAnim: false, totalFeedings: 0, goodFeedings: 0,
     });
-    setFoodLog([]); setUnlockedAch([]); setEquippedAcc([]); setUnlockedAcc([]);
+    setFoodLog([]); setUnlockedAch([]); setEquippedAcc([]); setUnlockedAcc([]); setShowStatsScreen(false);
   }
 
   async function handleEquipAccessory(id: string) {
@@ -2341,7 +2494,7 @@ export default function NutriPet() {
             {[
               { icon:'🏆', onClick:() => setShowAchievements(true), title:'Logros', badge: unlockedAch.length },
               { icon:'🎨', onClick:() => setShowAccessories(true), title:'Accesorios' },
-              { icon:'👨‍👩‍👧', onClick:() => setShowParent(true), title:'Padres' },
+              { icon:'📊', onClick:() => setShowStatsScreen(true), title:'Estadísticas' },
               { icon:'🚪', onClick:handleLogout, title:'Salir' },
             ].map(btn => (
               <button key={btn.icon} onClick={btn.onClick} title={btn.title} style={{ position:'relative', width:38, height:38, borderRadius:12, background: dark ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.7)', border:'none', cursor:'pointer', fontSize:16, backdropFilter:'blur(10px)' }}>
@@ -2480,20 +2633,7 @@ export default function NutriPet() {
               marginBottom: 20,
             }}
           >
-            <div style={{ position:'relative' }}>
-              <PetFace mood={pet.mood} sleeping={pet.sleeping} health={pet.health} feedAnim={pet.feedAnim}/>
-              {/* Accessories overlay */}
-              {equippedAcc.map(id => {
-                const acc = ACCESSORIES[id];
-                if (!acc) return null;
-                const pos: Record<string, any> = {
-                  hat:     { position:'absolute', top:-18, left:'50%', transform:'translateX(-50%)', fontSize:36, pointerEvents:'none' },
-                  glasses: { position:'absolute', top:56,  left:'50%', transform:'translateX(-50%)', fontSize:28, pointerEvents:'none' },
-                  cape:    { position:'absolute', bottom:-10, right:-10, fontSize:28, pointerEvents:'none' },
-                };
-                return <div key={id} style={pos[acc.type]}>{acc.icon}</div>;
-              })}
-            </div>
+            <PetFace mood={pet.mood} sleeping={pet.sleeping} health={pet.health} feedAnim={pet.feedAnim} equipped={equippedAcc}/>
           </div>
           <div style={{ textAlign: 'center', marginBottom: 20 }}>
             <span
@@ -2691,7 +2831,7 @@ export default function NutriPet() {
       {newAch && <AchievementToast achievement={newAch} onDone={() => setNewAch(null)} />}
       {showAchievements && <AchievementsScreen unlocked={unlockedAch} onClose={() => setShowAchievements(false)} dark={dark} />}
       {showAccessories && <AccessoriesScreen unlocked={unlockedAcc} equipped={equippedAcc} onEquip={handleEquipAccessory} onClose={() => setShowAccessories(false)} dark={dark} />}
-      {showParent && <ParentScreen userId={pet.userId} username={pet.username} totalFeedings={pet.totalFeedings} goodFeedings={pet.goodFeedings} onClose={() => setShowParent(false)} />}
+      {showStatsScreen && <StatsScreen userId={pet.userId} username={pet.username} totalFeedings={pet.totalFeedings} goodFeedings={pet.goodFeedings} onClose={() => setShowStatsScreen(false)} dark={dark} />}
       <style>{`@keyframes achievementPop{from{opacity:0;transform:translateX(-50%) translateY(-20px) scale(0.8)}to{opacity:1;transform:translateX(-50%) translateY(0) scale(1)}}`}</style>
     </div>
   );
