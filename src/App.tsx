@@ -474,167 +474,176 @@ function NutriScoreBadge({ score, size = 'large' }) {
 
 // ─── CAMERA SCANNER ───────────────────────────────────────────────────────────
 function CameraScanner({ onDetected, onClose }) {
-  const videoRef = useRef(null);
   const canvasRef = useRef(null);
-  const streamRef = useRef(null);
-  const rafRef = useRef(null);
-  const detectorRef = useRef(null);
-  const [err, setErr] = useState('');
-  const [ready, setReady] = useState(false);
-  const [hint, setHint] = useState('Iniciando cámara...');
+  const imgRef = useRef(null);
+  const [status, setStatus] = useState<'idle'|'processing'|'error'|'success'>('idle');
+  const [preview, setPreview] = useState<string|null>(null);
+  const [errMsg, setErrMsg] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
+  // Load ZXing on mount
   useEffect(() => {
-    let mounted = true;
-
-    async function startNative() {
-      // Try native BarcodeDetector API (iOS 17+, Chrome Android, desktop Chrome)
-      try {
-        const formats = ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','pdf417','data_matrix','qr_code'];
-        const supported = await (window as any).BarcodeDetector.getSupportedFormats().catch(() => formats);
-        detectorRef.current = new (window as any).BarcodeDetector({ formats: supported.length ? supported : formats });
-      } catch {
-        detectorRef.current = null;
-      }
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false,
-        });
-        if (!mounted) { stream.getTracks().forEach(t => t.stop()); return; }
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-        if (mounted) { setReady(true); setHint('Apunta al código de barras 🛒'); }
-        scanLoop();
-      } catch (e) {
-        if (mounted) setErr('No se pudo acceder a la cámara. Abre Ajustes > Safari > Cámara y permite el acceso.');
-      }
-    }
-
-    function scanLoop() {
-      if (!mounted) return;
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (!video || !canvas || video.readyState < 2) {
-        rafRef.current = requestAnimationFrame(scanLoop);
-        return;
-      }
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0);
-
-      // Method 1: Native BarcodeDetector
-      if (detectorRef.current) {
-        detectorRef.current.detect(canvas).then((barcodes) => {
-          if (!mounted) return;
-          if (barcodes && barcodes.length > 0) {
-            const code = barcodes[0].rawValue;
-            if (code) { stop(); onDetected(code); return; }
-          }
-          rafRef.current = setTimeout(() => requestAnimationFrame(scanLoop), 300);
-        }).catch(() => {
-          rafRef.current = setTimeout(() => requestAnimationFrame(scanLoop), 300);
-        });
-      } else {
-        // Method 2: ZXing via CDN as fallback
-        if ((window as any).ZXing) {
-          tryZXing(canvas, ctx);
-        } else {
-          rafRef.current = setTimeout(() => requestAnimationFrame(scanLoop), 300);
-        }
-      }
-    }
-
-    function tryZXing(canvas, ctx) {
-      if (!mounted) return;
-      try {
-        const hints = new (window as any).ZXing.Map();
-        const formats = [
-          (window as any).ZXing.BarcodeFormat.EAN_13,
-          (window as any).ZXing.BarcodeFormat.EAN_8,
-          (window as any).ZXing.BarcodeFormat.CODE_128,
-          (window as any).ZXing.BarcodeFormat.UPC_A,
-        ];
-        hints.set((window as any).ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-        const reader = new (window as any).ZXing.MultiFormatReader();
-        reader.setHints(hints);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const luminance = new (window as any).ZXing.RGBLuminanceSource(imageData.data, canvas.width, canvas.height);
-        const bitmap = new (window as any).ZXing.BinaryBitmap(new (window as any).ZXing.HybridBinarizer(luminance));
-        const result = reader.decode(bitmap);
-        if (result && result.getText()) { stop(); onDetected(result.getText()); return; }
-      } catch { /* not detected yet */ }
-      rafRef.current = setTimeout(() => requestAnimationFrame(scanLoop), 300);
-    }
-
-    function stop() {
-      mounted = false;
-      if (rafRef.current) { clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
-      if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
-    }
-
-    // Load ZXing as fallback
     if (!(window as any).ZXing) {
       const s = document.createElement('script');
       s.src = 'https://unpkg.com/@zxing/library@0.19.1/umd/index.min.js';
       document.head.appendChild(s);
     }
-
-    startNative();
-    return () => { mounted = false; stop(); };
   }, []);
 
-  function handleClose() {
-    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); }
-    if (rafRef.current) { clearTimeout(rafRef.current); cancelAnimationFrame(rafRef.current); }
-    onClose();
+  async function processImage(file: File) {
+    setStatus('processing');
+    setErrMsg('');
+
+    // Show preview
+    const previewUrl = URL.createObjectURL(file);
+    setPreview(previewUrl);
+
+    // Give time for ZXing to load and image to render
+    await new Promise(r => setTimeout(r, 600));
+
+    // Method 1: Native BarcodeDetector (iOS 17+, Chrome)
+    try {
+      if ((window as any).BarcodeDetector) {
+        const formats = ['ean_13','ean_8','code_128','code_39','upc_a','upc_e','itf','pdf417','qr_code'];
+        const detector = new (window as any).BarcodeDetector({ formats });
+        const img = imgRef.current;
+        if (img) {
+          const barcodes = await detector.detect(img);
+          if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+            setStatus('success');
+            onDetected(barcodes[0].rawValue);
+            return;
+          }
+        }
+      }
+    } catch { /* try next method */ }
+
+    // Method 2: ZXing on canvas
+    try {
+      const ZXing = (window as any).ZXing;
+      if (ZXing) {
+        const img = new Image();
+        img.src = previewUrl;
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; });
+
+        const canvas = canvasRef.current as HTMLCanvasElement;
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+        const hints = new Map();
+        hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+          ZXing.BarcodeFormat.EAN_13,
+          ZXing.BarcodeFormat.EAN_8,
+          ZXing.BarcodeFormat.CODE_128,
+          ZXing.BarcodeFormat.CODE_39,
+          ZXing.BarcodeFormat.UPC_A,
+          ZXing.BarcodeFormat.UPC_E,
+        ]);
+        hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+
+        const reader = new ZXing.MultiFormatReader();
+        reader.setHints(hints);
+        const luminance = new ZXing.RGBLuminanceSource(imageData.data, canvas.width, canvas.height);
+        const bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(luminance));
+        const result = reader.decode(bitmap);
+        if (result && result.getText()) {
+          setStatus('success');
+          onDetected(result.getText());
+          return;
+        }
+      }
+    } catch { /* not found */ }
+
+    // Nothing found
+    setStatus('error');
+    setErrMsg('No se detectó ningún código. Intenta acercarte más o con mejor luz.');
+    setPreview(null);
+  }
+
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (file) processImage(file);
+    // Reset input so same photo can be retried
+    e.target.value = '';
   }
 
   return (
-    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.95)', zIndex:200, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:20 }}>
-      <div style={{ width:'100%', maxWidth:400, background:'#111', borderRadius:28, overflow:'hidden' }}>
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.92)', zIndex:200, display:'flex', alignItems:'center', justifyContent:'center', padding:20 }}>
+      <canvas ref={canvasRef} style={{ display:'none' }} />
+      <div style={{ width:'100%', maxWidth:380, background:'#111', borderRadius:28, overflow:'hidden' }}>
+
+        {/* Header */}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'16px 20px', background:'#1a1a1a' }}>
-          <span style={{ color:'white', fontWeight:800, fontSize:16 }}>📷 Escanea el código de barras</span>
-          <button onClick={handleClose} style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', borderRadius:'50%', width:34, height:34, cursor:'pointer', fontSize:16 }}>✕</button>
+          <span style={{ color:'white', fontWeight:800, fontSize:16 }}>📷 Escanear código</span>
+          <button onClick={onClose} style={{ background:'rgba(255,255,255,0.1)', border:'none', color:'white', borderRadius:'50%', width:34, height:34, cursor:'pointer', fontSize:16 }}>✕</button>
         </div>
-        {err ? (
-          <div style={{ padding:30, textAlign:'center' }}>
-            <p style={{ color:'#ff6b6b', margin:'0 0 16px', fontSize:14, lineHeight:1.5 }}>{err}</p>
-            <button onClick={handleClose} style={{ padding:'10px 24px', borderRadius:12, background:'#FF6B9D', border:'none', color:'white', fontWeight:700, cursor:'pointer' }}>Cerrar</button>
-          </div>
-        ) : (
-          <>
-            <div style={{ position:'relative', background:'#000' }}>
-              <video
-                ref={videoRef}
-                muted
-                playsInline
-                style={{ width:'100%', maxHeight:280, display:'block', objectFit:'cover' }}
+
+        <div style={{ padding:24 }}>
+          {/* Preview */}
+          {preview && (
+            <div style={{ marginBottom:16, borderRadius:16, overflow:'hidden', background:'#000', textAlign:'center' }}>
+              <img
+                ref={imgRef}
+                src={preview}
+                crossOrigin="anonymous"
+                style={{ maxWidth:'100%', maxHeight:200, objectFit:'contain', display:'block', margin:'0 auto' }}
+                alt="preview"
               />
-              <canvas ref={canvasRef} style={{ display:'none' }} />
-              {/* Aiming overlay */}
-              {ready && (
-                <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
-                  <div style={{ width:260, height:100, border:'3px solid #FF6B9D', borderRadius:8, boxShadow:'0 0 0 2000px rgba(0,0,0,0.4)' }}>
-                    <div style={{ position:'absolute', top:0, left:0, width:20, height:20, borderTop:'4px solid #FF6B9D', borderLeft:'4px solid #FF6B9D', borderRadius:'4px 0 0 0' }} />
-                    <div style={{ position:'absolute', top:0, right:0, width:20, height:20, borderTop:'4px solid #FF6B9D', borderRight:'4px solid #FF6B9D', borderRadius:'0 4px 0 0' }} />
-                    <div style={{ position:'absolute', bottom:0, left:0, width:20, height:20, borderBottom:'4px solid #FF6B9D', borderLeft:'4px solid #FF6B9D', borderRadius:'0 0 0 4px' }} />
-                    <div style={{ position:'absolute', bottom:0, right:0, width:20, height:20, borderBottom:'4px solid #FF6B9D', borderRight:'4px solid #FF6B9D', borderRadius:'0 0 4px 0' }} />
-                  </div>
-                </div>
-              )}
             </div>
-            <div style={{ padding:'14px 20px 20px', textAlign:'center' }}>
-              <p style={{ color: ready ? '#aaa' : '#666', fontSize:13, margin:0 }}>
-                {ready ? '🔍 ' : '⏳ '}{hint}
-              </p>
+          )}
+
+          {/* Status message */}
+          {status === 'processing' && (
+            <div style={{ textAlign:'center', padding:'12px 0', marginBottom:16 }}>
+              <div style={{ fontSize:32, marginBottom:8 }}>🔍</div>
+              <p style={{ color:'#aaa', fontSize:14, margin:0 }}>Analizando imagen...</p>
             </div>
-          </>
-        )}
+          )}
+          {status === 'error' && (
+            <div style={{ background:'#2a1515', borderRadius:14, padding:14, marginBottom:16, textAlign:'center' }}>
+              <p style={{ color:'#ff6b6b', fontSize:13, margin:0, lineHeight:1.5 }}>⚠️ {errMsg}</p>
+            </div>
+          )}
+
+          {/* Main button - opens camera on iPhone */}
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={handleFileChange}
+            style={{ display:'none' }}
+          />
+          <button
+            onClick={() => inputRef.current?.click()}
+            disabled={status === 'processing'}
+            style={{
+              width:'100%', padding:'16px 0', borderRadius:18, border:'none',
+              background: status === 'processing' ? '#333' : 'linear-gradient(135deg,#FF6B9D,#A855F7)',
+              color:'white', fontSize:17, fontWeight:900, cursor: status === 'processing' ? 'default' : 'pointer',
+              boxShadow: status === 'processing' ? 'none' : '0 6px 20px rgba(255,107,157,0.4)',
+              marginBottom:12,
+            }}
+          >
+            {status === 'processing' ? '⏳ Procesando...' : status === 'error' ? '📷 Intentar otra vez' : '📷 Abrir cámara'}
+          </button>
+
+          {/* Instructions */}
+          <div style={{ background:'#1a1a1a', borderRadius:14, padding:14 }}>
+            <p style={{ color:'#666', fontSize:12, margin:'0 0 8px', fontWeight:700, textTransform:'uppercase', letterSpacing:1 }}>Cómo hacerlo</p>
+            {[
+              '📷 Pulsa "Abrir cámara"',
+              '🎯 Enfoca el código de barras',
+              '📸 Haz la foto',
+              '✅ ¡Listo! Se detecta solo',
+            ].map((tip, i) => (
+              <p key={i} style={{ color:'#888', fontSize:13, margin: i < 3 ? '0 0 6px' : 0 }}>{tip}</p>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
