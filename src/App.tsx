@@ -599,134 +599,137 @@ function NutriScoreBadge({ score, size = 'large' }) {
 }
 
 // ─── CAMERA SCANNER ───────────────────────────────────────────────────────────
+// Strategy: try BarcodeDetector (native, works great on Android Chrome) first.
+// If not supported, fall back to QuaggaJS (works on iOS Safari).
 function CameraScanner({ onDetected, onClose }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [status, setStatus] = useState<'loading'|'live'|'processing'|'error'>('loading');
+  const [status, setStatus] = useState<'loading'|'live'|'detected'|'error'>('loading');
   const [errMsg, setErrMsg] = useState('');
+  const [mode, setMode] = useState<'native'|'quagga'|null>(null);
+  const streamRef = useRef<MediaStream|null>(null);
+  const rafRef = useRef<number>(0);
   const quaggaStarted = useRef(false);
-  const lastCode = useRef<string>('');
-  const codeCount = useRef<number>(0);
+  const lastCode = useRef('');
+  const codeCount = useRef(0);
+  const detectedRef = useRef(false);
 
-  useEffect(() => {
-    let mounted = true;
+  function fireDetected(code: string) {
+    if (detectedRef.current) return;
+    detectedRef.current = true;
+    if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
+    try {
+      const actx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = actx.createOscillator();
+      const gain = actx.createGain();
+      osc.connect(gain); gain.connect(actx.destination);
+      osc.frequency.setValueAtTime(1200, actx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(900, actx.currentTime + 0.15);
+      gain.gain.setValueAtTime(0.3, actx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.25);
+      osc.start(); osc.stop(actx.currentTime + 0.25);
+    } catch {}
+    setStatus('detected');
+    setTimeout(() => onDetected(code), 450);
+  }
 
-    function startQuagga() {
+  function validateEAN(code: string): boolean {
+    if (code.length !== 13 && code.length !== 8) return true; // non-EAN, accept
+    const digits = code.split('').map(Number);
+    if (code.length === 13) {
+      const sum = digits.slice(0,12).reduce((s,d,i) => s + d*(i%2===0?1:3), 0);
+      return (10-(sum%10))%10 === digits[12];
+    }
+    // EAN-8
+    const sum = digits.slice(0,7).reduce((s,d,i) => s + d*(i%2===0?3:1), 0);
+    return (10-(sum%10))%10 === digits[7];
+  }
+
+  function confirmCode(code: string) {
+    if (!code || code.length < 8) return;
+    if (!validateEAN(code)) return;
+    if (code === lastCode.current) { codeCount.current++; }
+    else { lastCode.current = code; codeCount.current = 1; }
+    if (codeCount.current >= 2) fireDetected(code);
+  }
+
+  // ── Native BarcodeDetector (Android Chrome, Samsung Internet, etc.) ──
+  async function startNative() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } }
+      });
+      streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      setStatus('live');
+      setMode('native');
+      const detector = new (window as any).BarcodeDetector({
+        formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']
+      });
+      async function scan() {
+        if (detectedRef.current || !videoRef.current) return;
+        try {
+          const barcodes = await detector.detect(videoRef.current);
+          if (barcodes.length > 0) confirmCode(barcodes[0].rawValue);
+        } catch {}
+        rafRef.current = requestAnimationFrame(scan);
+      }
+      // Small delay to let video stabilize
+      setTimeout(() => { rafRef.current = requestAnimationFrame(scan); }, 500);
+    } catch {
+      // Native failed (no permission or not supported) - try Quagga
+      startQuagga();
+    }
+  }
+
+  // ── QuaggaJS fallback (iOS Safari, Firefox) ──
+  function startQuagga() {
+    setMode('quagga');
+    function init() {
       const Q = (window as any).Quagga;
-      if (!Q || !containerRef.current) return;
-      if (quaggaStarted.current) return;
+      if (!Q || !containerRef.current || quaggaStarted.current) return;
       quaggaStarted.current = true;
-
       Q.init({
         inputStream: {
-          name: 'Live',
-          type: 'LiveStream',
-          target: containerRef.current,
-          constraints: {
-            facingMode: 'environment',
-            // Alta resolución = más píxeles = mejor detección
-            width: { min: 1280, ideal: 1920 },
-            height: { min: 720, ideal: 1080 },
-          },
-          // Área de análisis recortada al centro (donde está el recuadro)
-          // Quagga solo analiza esta zona, más rápido y preciso
-          area: {
-            top: '25%',
-            right: '5%',
-            left: '5%',
-            bottom: '25%',
-          },
+          name: 'Live', type: 'LiveStream', target: containerRef.current,
+          constraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          area: { top:'20%', right:'5%', left:'5%', bottom:'20%' },
         },
-        locator: {
-          patchSize: 'large',   // 'large' detecta mejor códigos algo alejados
-          halfSample: false,    // false = analiza píxeles reales, más preciso
-        },
-        numOfWorkers: 0,
-        frequency: 10,          // más intentos por segundo
-        decoder: {
-          readers: ['ean_reader','ean_8_reader','code_128_reader','upc_reader','upc_e_reader'],
-          // Exigir que el código se detecte 2 veces seguidas antes de confirmar
-          // Elimina falsos positivos
-          multiple: false,
-        },
+        locator: { patchSize: 'large', halfSample: false },
+        numOfWorkers: 0, frequency: 10,
+        decoder: { readers: ['ean_reader','ean_8_reader','code_128_reader','upc_reader','upc_e_reader'] },
         locate: true,
       }, (err: any) => {
-        if (!mounted) return;
-        if (err) {
-          setStatus('error');
-          setErrMsg('No se pudo acceder a la cámara. Permite el acceso en Ajustes → Safari → Cámara.');
-          return;
-        }
-        Q.start();
-        if (mounted) setStatus('live');
+        if (err) { setStatus('error'); setErrMsg('No se pudo acceder a la cámara. Permite el acceso en Ajustes → Cámara.'); return; }
+        Q.start(); setStatus('live');
       });
-
-      Q.onDetected((result: any) => {
-        const code = result?.codeResult?.code;
-        const confidence = result?.codeResult?.decodedCodes
-          ?.filter((c: any) => c.error !== undefined)
-          ?.reduce((acc: number, c: any) => acc + (1 - c.error), 0) ?? 0;
-
-        if (!code || code.length < 8) return;
-
-        // Verificación EAN-13: validar dígito de control
-        if (code.length === 13) {
-          const digits = code.split('').map(Number);
-          const check = digits.slice(0, 12).reduce((sum: number, d: number, i: number) =>
-            sum + d * (i % 2 === 0 ? 1 : 3), 0);
-          const expected = (10 - (check % 10)) % 10;
-          if (expected !== digits[12]) return; // código inválido, ignorar
-        }
-
-        // Confirmación doble: el mismo código debe detectarse 2 veces seguidas
-        if (code === lastCode.current) {
-          codeCount.current++;
-        } else {
-          lastCode.current = code;
-          codeCount.current = 1;
-        }
-
-        // Necesita 2 detecciones consecutivas del mismo código
-        if (codeCount.current < 2) return;
-
-        Q.stop();
-        quaggaStarted.current = false;
-        lastCode.current = '';
-        codeCount.current = 0;
-
-        // Vibración
-        if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
-        // Beep sonoro
-        try {
-          const actx = new (window.AudioContext || (window as any).webkitAudioContext)();
-          const osc = actx.createOscillator();
-          const gain = actx.createGain();
-          osc.connect(gain); gain.connect(actx.destination);
-          osc.frequency.setValueAtTime(1200, actx.currentTime);
-          osc.frequency.exponentialRampToValueAtTime(900, actx.currentTime + 0.1);
-          gain.gain.setValueAtTime(0.3, actx.currentTime);
-          gain.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + 0.2);
-          osc.start(actx.currentTime);
-          osc.stop(actx.currentTime + 0.2);
-        } catch {}
-        // Flash y delay antes de continuar
-        setStatus('detected' as any);
-        setTimeout(() => onDetected(code), 400);
-      });
+      Q.onDetected((result: any) => { confirmCode(result?.codeResult?.code); });
     }
+    if ((window as any).Quagga) { init(); return; }
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js';
+    s.onload = init;
+    s.onerror = () => { setStatus('error'); setErrMsg('No se pudo cargar el escáner. Comprueba tu conexión.'); };
+    document.head.appendChild(s);
+  }
 
-    function loadQuagga() {
-      if ((window as any).Quagga) { startQuagga(); return; }
-      const s = document.createElement('script');
-      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js';
-      s.onload = () => { if (mounted) startQuagga(); };
-      s.onerror = () => { if (mounted) { setStatus('error'); setErrMsg('No se pudo cargar el escáner.'); } };
-      document.head.appendChild(s);
+  useEffect(() => {
+    // Use native BarcodeDetector if available, else Quagga
+    if (typeof (window as any).BarcodeDetector !== 'undefined') {
+      (window as any).BarcodeDetector.getSupportedFormats().then((fmts: string[]) => {
+        if (fmts.includes('ean_13') || fmts.includes('code_128')) startNative();
+        else startQuagga();
+      }).catch(() => startNative());
+    } else {
+      startQuagga();
     }
-
-    loadQuagga();
-
     return () => {
-      mounted = false;
+      detectedRef.current = true; // stop scan loop
+      cancelAnimationFrame(rafRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
       if (quaggaStarted.current && (window as any).Quagga) {
         try { (window as any).Quagga.stop(); } catch {}
         quaggaStarted.current = false;
@@ -735,85 +738,88 @@ function CameraScanner({ onDetected, onClose }) {
   }, []);
 
   function handleClose() {
+    detectedRef.current = true;
+    cancelAnimationFrame(rafRef.current);
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     if (quaggaStarted.current && (window as any).Quagga) {
       try { (window as any).Quagga.stop(); } catch {}
-      quaggaStarted.current = false;
     }
     onClose();
   }
 
+  const isLive = status === 'live' || status === 'detected';
+
   return (
     <div style={{ position:'fixed', inset:0, background:'#000', zIndex:200, display:'flex', flexDirection:'column' }}>
-
-      {/* Camera viewport */}
       <div style={{ flex:1, position:'relative', overflow:'hidden' }}>
 
-        {/* Quagga mounts video here */}
-        <div
-          id="quagga-container"
-          ref={containerRef}
-          style={{ width:'100%', height:'100%' }}
-        />
+        {/* Native mode: our own <video> */}
+        {mode === 'native' && (
+          <video ref={videoRef} playsInline muted autoPlay
+            style={{ position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover' }}/>
+        )}
 
-        {/* Quagga injects a <video> and <canvas> — style them */}
+        {/* Quagga mode: it mounts its own video inside containerRef */}
+        <div ref={containerRef} id="quagga-container"
+          style={{ position:'absolute', inset:0, width:'100%', height:'100%', display: mode==='quagga' ? 'block' : 'none' }}/>
         <style>{`
-          #quagga-container video, #quagga-container canvas.drawingBuffer {
-            position: absolute !important;
-            top: 0; left: 0;
-            width: 100% !important;
-            height: 100% !important;
-            object-fit: cover;
-          }
-          #quagga-container canvas.drawingBuffer { opacity: 0.4; }
+          #quagga-container video { position:absolute!important; top:0; left:0; width:100%!important; height:100%!important; object-fit:cover; }
+          #quagga-container canvas.drawingBuffer { display:none; }
         `}</style>
 
-        {/* Detected flash */}
-        {(status as any) === 'detected' && (
-          <div style={{ position:'absolute', inset:0, background:'rgba(40,220,100,0.35)', zIndex:10, display:'flex', alignItems:'center', justifyContent:'center', animation:'flashGreen 0.4s ease' }}>
-            <div style={{ fontSize:72 }}>✅</div>
+        {/* Green flash on detection */}
+        {status === 'detected' && (
+          <div style={{ position:'absolute', inset:0, background:'rgba(40,220,100,0.4)', zIndex:10,
+            display:'flex', alignItems:'center', justifyContent:'center', animation:'flashGreen 0.45s ease' }}>
+            <div style={{ fontSize:80 }}>✅</div>
           </div>
         )}
 
-        {/* Aiming overlay */}
-        {(status === 'live' || (status as any) === 'detected') && (
+        {/* Aiming box */}
+        {isLive && (
           <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', pointerEvents:'none' }}>
-            <div style={{ position:'relative', width:'82%', height:120, border:`3px solid ${(status as any) === 'detected' ? '#28dc64' : '#FF6B9D'}`, borderRadius:12, boxShadow:`0 0 0 9999px rgba(0,0,0,0.5)`, background:'transparent', transition:'border-color 0.2s' }}>
-              {/* Corners */}
-              {([
-                {top:0,left:0,borderTop:'4px solid #FF6B9D',borderLeft:'4px solid #FF6B9D'},
-                {top:0,right:0,borderTop:'4px solid #FF6B9D',borderRight:'4px solid #FF6B9D'},
-                {bottom:0,left:0,borderBottom:'4px solid #FF6B9D',borderLeft:'4px solid #FF6B9D'},
-                {bottom:0,right:0,borderBottom:'4px solid #FF6B9D',borderRight:'4px solid #FF6B9D'},
-              ] as any[]).map((s,i) => (
-                <div key={i} style={{ position:'absolute', width:22, height:22, ...s }}/>
+            <div style={{ position:'relative', width:'84%', height:130,
+              border: `3px solid ${status==='detected'?'#28dc64':'#FF6B9D'}`,
+              borderRadius:14, boxShadow:'0 0 0 9999px rgba(0,0,0,0.52)', transition:'border-color 0.2s' }}>
+              {([{top:0,left:0},{top:0,right:0},{bottom:0,left:0},{bottom:0,right:0}] as any[]).map((s,i) => (
+                <div key={i} style={{ position:'absolute', width:24, height:24, ...s,
+                  borderTop: (i<2)?`4px solid #FF6B9D`:undefined,
+                  borderBottom: (i>=2)?`4px solid #FF6B9D`:undefined,
+                  borderLeft: (i%2===0)?`4px solid #FF6B9D`:undefined,
+                  borderRight: (i%2===1)?`4px solid #FF6B9D`:undefined }}/>
               ))}
-              {/* Scan line */}
-              <div style={{ position:'absolute', left:4, right:4, height:2, background:'linear-gradient(90deg,transparent,#FF6B9D,transparent)', top:'50%', animation:'scanLine 1.8s ease-in-out infinite' }}/>
+              {status === 'live' && (
+                <div style={{ position:'absolute', left:6, right:6, height:2,
+                  background:'linear-gradient(90deg,transparent,#FF6B9D,transparent)',
+                  top:'50%', animation:'scanLine 1.8s ease-in-out infinite' }}/>
+              )}
             </div>
           </div>
         )}
 
-        {/* Loading spinner */}
+        {/* Loading */}
         {status === 'loading' && (
           <div style={{ position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center', background:'#000' }}>
             <div style={{ textAlign:'center' }}>
-              <div style={{ fontSize:40, marginBottom:12 }}>📷</div>
-              <p style={{ color:'#aaa', fontSize:14, margin:0 }}>Iniciando cámara...</p>
+              <div style={{ fontSize:44 }}>📷</div>
+              <p style={{ color:'#aaa', fontSize:14, marginTop:10 }}>Iniciando cámara...</p>
             </div>
           </div>
         )}
 
         {/* Top bar */}
-        <div style={{ position:'absolute', top:0, left:0, right:0, padding:'16px 20px', display:'flex', justifyContent:'space-between', alignItems:'center', background:'linear-gradient(to bottom,rgba(0,0,0,0.65),transparent)', pointerEvents:'none' }}>
+        <div style={{ position:'absolute', top:0, left:0, right:0, padding:'16px 20px',
+          background:'linear-gradient(to bottom,rgba(0,0,0,0.7),transparent)', pointerEvents:'none' }}>
           <span style={{ color:'white', fontWeight:800, fontSize:15 }}>
-            {status === 'live' ? '🔍 Buscando código...' : status === 'loading' ? '⏳ Cargando...' : '❌ Error'}
+            {status==='live' ? '🔍 Buscando código...' : status==='loading' ? '⏳ Cargando...' : status==='detected' ? '✅ ¡Detectado!' : '❌ Error'}
           </span>
+          {mode && <span style={{ color:'rgba(255,255,255,0.4)', fontSize:10, marginLeft:8 }}>({mode})</span>}
         </div>
 
         {/* Hint */}
         {status === 'live' && (
-          <div style={{ position:'absolute', bottom:20, left:20, right:20, textAlign:'center', pointerEvents:'none' }}>
-            <p style={{ color:'rgba(255,255,255,0.75)', fontSize:13, margin:0, textShadow:'0 1px 4px rgba(0,0,0,0.8)' }}>
+          <div style={{ position:'absolute', bottom:16, left:20, right:20, textAlign:'center', pointerEvents:'none' }}>
+            <p style={{ color:'rgba(255,255,255,0.7)', fontSize:13, margin:0, textShadow:'0 1px 4px rgba(0,0,0,0.8)' }}>
               Centra el código de barras en el recuadro
             </p>
           </div>
@@ -829,20 +835,15 @@ function CameraScanner({ onDetected, onClose }) {
           </div>
         ) : (
           <>
-            <p style={{ color:'#555', fontSize:12, margin:0, flex:1 }}>Detección automática</p>
+            <p style={{ color:'#555', fontSize:12, margin:0 }}>Detección automática</p>
             <button onClick={handleClose} style={{ padding:'12px 20px', borderRadius:16, border:'2px solid #333', background:'transparent', color:'#aaa', fontWeight:700, cursor:'pointer', fontSize:14 }}>Cancelar</button>
           </>
         )}
       </div>
 
       <style>{`
-        @keyframes scanLine {
-          0%, 100% { transform: translateY(-45px); opacity:0.3; }
-          50% { transform: translateY(45px); opacity:1; }
-        }
-        @keyframes flashGreen {
-          0% { opacity:0; } 30% { opacity:1; } 100% { opacity:0; }
-        }
+        @keyframes scanLine { 0%,100%{transform:translateY(-50px);opacity:0.3} 50%{transform:translateY(50px);opacity:1} }
+        @keyframes flashGreen { 0%{opacity:0} 30%{opacity:1} 100%{opacity:0} }
       `}</style>
     </div>
   );
@@ -1327,19 +1328,31 @@ function LoginScreen() {
         pet.hunger = Math.max(0, pet.hunger - elapsed * 0.008);
       }
       localStorage.setItem('nutripet_session', JSON.stringify({ userId: user.id, username: user.username, emoji: user.emoji, savedAt: Date.now() }));
+
+      // Prefer localStorage state if it's newer than Supabase
+      let fH = pet.health, fU = pet.hunger, fE = pet.energy;
+      let fSleep = pet.sleeping, fMood = pet.mood, fFood = pet.last_food;
+      let fTotal = pet.total_feedings, fGood = pet.good_feedings;
+      try {
+        const rawState = localStorage.getItem('nutripet_state');
+        if (rawState) {
+          const ls = JSON.parse(rawState);
+          const supaTs = new Date(pet.updated_at).getTime();
+          if (ls.savedAt > supaTs) {
+            const el = Math.min(Math.floor((Date.now() - ls.savedAt) / 1000), 7200);
+            fH = ls.sleeping ? Math.min(100, ls.health + el*0.005) : Math.max(0, ls.health - el*0.015);
+            fU = ls.sleeping ? Math.max(0, ls.hunger - el*0.008) : Math.max(0, ls.hunger - el*0.05);
+            fE = ls.sleeping ? Math.min(100, ls.energy + el*0.025) : Math.max(0, ls.energy - el*0.03);
+            fSleep = ls.sleeping; fMood = ls.mood; fFood = ls.lastFood;
+            fTotal = ls.totalFeedings; fGood = ls.goodFeedings;
+          }
+        }
+      } catch {}
+
       petStore.setState({
-        loggedIn: true,
-        userId: user.id,
-        username: user.username,
-        emoji: user.emoji,
-        health: pet.health,
-        hunger: pet.hunger,
-        energy: pet.energy,
-        sleeping: pet.sleeping,
-        mood: pet.mood,
-        lastFood: pet.last_food,
-        totalFeedings: pet.total_feedings,
-        goodFeedings: pet.good_feedings,
+        loggedIn: true, userId: user.id, username: user.username, emoji: user.emoji,
+        health: fH, hunger: fU, energy: fE, sleeping: fSleep,
+        mood: fMood, lastFood: fFood, totalFeedings: fTotal, goodFeedings: fGood,
         _pendingRestore: false,
       });
     } catch (e) {
@@ -2514,6 +2527,7 @@ export default function NutriPet() {
   function handleLogout() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     localStorage.removeItem('nutripet_session');
+    localStorage.removeItem('nutripet_state');
     petStore.setState({
       loggedIn: false, userId: null, username: '', emoji: '🐱',
       health: 85, hunger: 70, energy: 80, sleeping: false,
