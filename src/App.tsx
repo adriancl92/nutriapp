@@ -610,6 +610,7 @@ function CameraScanner({ onDetected, onClose }) {
   const [torchOn, setTorchOn] = useState(false);
   const [torchAvailable, setTorchAvailable] = useState(false);
   const streamRef = useRef<MediaStream|null>(null);
+  const trackRef = useRef<MediaStreamTrack|null>(null);
   const rafRef = useRef<number>(0);
   const quaggaStarted = useRef(false);
   const lastCode = useRef('');
@@ -636,14 +637,23 @@ function CameraScanner({ onDetected, onClose }) {
   }
 
   async function toggleTorch() {
-    if (!streamRef.current) return;
-    const track = streamRef.current.getVideoTracks()[0];
+    const track = trackRef.current;
     if (!track) return;
+    const newVal = !torchOn;
     try {
-      const newVal = !torchOn;
       await track.applyConstraints({ advanced: [{ torch: newVal } as any] });
       setTorchOn(newVal);
-    } catch {}
+    } catch {
+      // Some devices need the constraint at stream level
+      try {
+        const stream = streamRef.current;
+        if (stream) {
+          const t = stream.getVideoTracks()[0];
+          await t.applyConstraints({ advanced: [{ torch: newVal } as any] });
+          setTorchOn(newVal);
+        }
+      } catch {}
+    }
   }
 
   function validateEAN(code: string): boolean {
@@ -660,7 +670,14 @@ function CameraScanner({ onDetected, onClose }) {
 
   function confirmCode(code: string) {
     if (!code || code.length < 8) return;
+    // EAN checksum is the quality gate — if it passes, the read is reliable
     if (!validateEAN(code)) return;
+    // For native BarcodeDetector: single confirmed read is enough (high accuracy)
+    // For Quagga on iPhone: require 2 consecutive same-code reads to reduce false positives
+    if (mode === 'native') {
+      fireDetected(code);
+      return;
+    }
     if (code === lastCode.current) { codeCount.current++; }
     else { lastCode.current = code; codeCount.current = 1; }
     if (codeCount.current >= 2) fireDetected(code);
@@ -679,11 +696,23 @@ function CameraScanner({ onDetected, onClose }) {
       }
       setStatus('live');
       setMode('native');
-      // Check torch support
+      // Save track ref and check torch support
       const track = stream.getVideoTracks()[0];
       if (track) {
-        const caps = track.getCapabilities() as any;
-        if (caps?.torch) setTorchAvailable(true);
+        trackRef.current = track;
+        // Check torch support with multiple fallbacks
+        setTimeout(async () => {
+          try {
+            // Method 1: getCapabilities
+            const caps = (track.getCapabilities as any)?.() as any;
+            if (caps?.torch) { setTorchAvailable(true); return; }
+          } catch {}
+          try {
+            // Method 2: try applying torch constraint — if it doesn't throw, it's supported
+            await track.applyConstraints({ advanced: [{ torch: false } as any] });
+            setTorchAvailable(true);
+          } catch {}
+        }, 500);
       }
       const detector = new (window as any).BarcodeDetector({
         formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']
@@ -714,28 +743,57 @@ function CameraScanner({ onDetected, onClose }) {
       Q.init({
         inputStream: {
           name: 'Live', type: 'LiveStream', target: containerRef.current,
-          constraints: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
-          area: { top:'20%', right:'5%', left:'5%', bottom:'20%' },
+          constraints: {
+            facingMode: 'environment',
+            // Resolución moderada — iPhone Safari se atraganta con resoluciones altas en Quagga
+            width: { min: 640, ideal: 1280, max: 1920 },
+            height: { min: 480, ideal: 720, max: 1080 },
+          },
+          // Sin área recortada — analiza toda la imagen para máxima tolerancia
+          // El recuadro visual es solo orientativo, no restringe el análisis
         },
-        locator: { patchSize: 'large', halfSample: false },
-        numOfWorkers: 0, frequency: 10,
-        decoder: { readers: ['ean_reader','ean_8_reader','code_128_reader','upc_reader','upc_e_reader'] },
+        locator: {
+          patchSize: 'medium',  // 'medium' es más rápido que 'large' en CPU limitada
+          halfSample: true,     // true = más rápido, suficiente para EAN en buenas condiciones
+        },
+        numOfWorkers: 0,
+        frequency: 8,           // reducir a 8fps — iPhone Safari no aguanta 10 bien
+        decoder: {
+          readers: [
+            'ean_reader',       // EAN-13 (supermercado europeo) — prioridad máxima
+            'ean_8_reader',     // EAN-8
+            'upc_reader',       // UPC-A (productos americanos)
+            'upc_e_reader',     // UPC-E
+          ],
+          // Sin code_128 ni code_39 — añaden falsos positivos en etiquetas
+        },
         locate: true,
       }, (err: any) => {
-        if (err) { setStatus('error'); setErrMsg('No se pudo acceder a la cámara. Permite el acceso en Ajustes → Cámara.'); return; }
+        if (err) { setStatus('error'); setErrMsg('No se pudo acceder a la cámara. Permite el acceso en Ajustes → Safari → Cámara.'); return; }
         Q.start(); setStatus('live');
-        // Check torch on Quagga stream
-        try {
-          const tracks = (Q.CameraAccess?.getActiveStreamLabel
-            ? [] : (navigator.mediaDevices as any)._activeStream?.getVideoTracks?.() || []);
-          // Alternative: check via getUserMedia constraints
-          navigator.mediaDevices.getUserMedia({ video: { facingMode:'environment' } })
-            .then(s => {
-              const t = s.getVideoTracks()[0];
-              s.getTracks().forEach(tr => tr.stop()); // stop this extra stream
-              if ((t?.getCapabilities() as any)?.torch) setTorchAvailable(true);
-            }).catch(() => {});
-        } catch {}
+        // In Quagga mode, get the active video track via the video element
+        setTimeout(() => {
+          try {
+            const videoEl = containerRef.current?.querySelector('video') as HTMLVideoElement;
+            if (videoEl?.srcObject) {
+              const stream = videoEl.srcObject as MediaStream;
+              const track = stream.getVideoTracks()[0];
+              if (track) {
+                trackRef.current = track;
+                setTimeout(async () => {
+                  try {
+                    const caps = (track.getCapabilities as any)?.() as any;
+                    if (caps?.torch) { setTorchAvailable(true); return; }
+                  } catch {}
+                  try {
+                    await track.applyConstraints({ advanced: [{ torch: false } as any] });
+                    setTorchAvailable(true);
+                  } catch {}
+                }, 500);
+              }
+            }
+          } catch {}
+        }, 800);
       });
       Q.onDetected((result: any) => { confirmCode(result?.codeResult?.code); });
     }
@@ -760,6 +818,11 @@ function CameraScanner({ onDetected, onClose }) {
     return () => {
       detectedRef.current = true; // stop scan loop
       cancelAnimationFrame(rafRef.current);
+      // Turn off torch before stopping
+      if (trackRef.current) {
+        try { trackRef.current.applyConstraints({ advanced: [{ torch: false } as any] }); } catch {}
+        trackRef.current = null;
+      }
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
       if (quaggaStarted.current && (window as any).Quagga) {
         try { (window as any).Quagga.stop(); } catch {}
@@ -771,6 +834,10 @@ function CameraScanner({ onDetected, onClose }) {
   function handleClose() {
     detectedRef.current = true;
     cancelAnimationFrame(rafRef.current);
+    if (trackRef.current) {
+      try { trackRef.current.applyConstraints({ advanced: [{ torch: false } as any] }); } catch {}
+      trackRef.current = null;
+    }
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     if (quaggaStarted.current && (window as any).Quagga) {
       try { (window as any).Quagga.stop(); } catch {}
@@ -850,8 +917,11 @@ function CameraScanner({ onDetected, onClose }) {
         {/* Hint */}
         {status === 'live' && (
           <div style={{ position:'absolute', bottom:16, left:20, right:20, textAlign:'center', pointerEvents:'none' }}>
-            <p style={{ color:'rgba(255,255,255,0.7)', fontSize:13, margin:0, textShadow:'0 1px 4px rgba(0,0,0,0.8)' }}>
-              Centra el código de barras en el recuadro
+            <p style={{ color:'rgba(255,255,255,0.85)', fontSize:13, margin:0, textShadow:'0 1px 4px rgba(0,0,0,0.9)', fontWeight:600 }}>
+              Acerca el código · mantén el móvil quieto
+            </p>
+            <p style={{ color:'rgba(255,255,255,0.5)', fontSize:11, margin:'4px 0 0', textShadow:'0 1px 4px rgba(0,0,0,0.8)' }}>
+              Las barras deben ocupar el ancho del recuadro
             </p>
           </div>
         )}
@@ -1376,9 +1446,10 @@ function LoginScreen() {
         const rawState = localStorage.getItem('nutripet_state');
         if (rawState) {
           const ls = JSON.parse(rawState);
-          const supaTs = new Date(pet.updated_at).getTime();
           // Only use localStorage if it belongs to THIS user
-          if (ls.userId === user.id && ls.savedAt > supaTs) {
+          if (ls.userId === user.id) {
+            // Use localStorage — it's always more up-to-date than Supabase
+            // Apply decay since last save
             const el = Math.min(Math.floor((Date.now() - ls.savedAt) / 1000), 7200);
             fH = ls.sleeping ? Math.min(100, ls.health + el*0.005) : Math.max(0, ls.health - el*0.015);
             fU = ls.sleeping ? Math.max(0, ls.hunger - el*0.008) : Math.max(0, ls.hunger - el*0.05);
@@ -2351,7 +2422,6 @@ export default function NutriPet() {
         }
       } catch {
         localStorage.removeItem('nutripet_session');
-        localStorage.removeItem('nutripet_state');
         petStore.setState({ _pendingRestore: false, userId: null, username: '', loggedIn: false });
       }
     }
@@ -2571,17 +2641,28 @@ export default function NutriPet() {
 
   function handleLogout() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
-    // Force immediate Supabase save before logout so data is persisted
     const s = petStore.getState();
     if (s.userId) {
+      // Save final state to localStorage BEFORE clearing session
+      // so it survives logout and can be restored on next login
+      try {
+        localStorage.setItem('nutripet_state', JSON.stringify({
+          userId: s.userId,
+          health: s.health, hunger: s.hunger, energy: s.energy,
+          sleeping: s.sleeping, mood: s.mood, lastFood: s.lastFood,
+          totalFeedings: s.totalFeedings, goodFeedings: s.goodFeedings,
+          savedAt: Date.now(),
+        }));
+      } catch {}
+      // Also save to Supabase (fire and forget)
       db.savePet(s.userId, {
         health: s.health, hunger: s.hunger, energy: s.energy,
         sleeping: s.sleeping, mood: s.mood, last_food: s.lastFood,
         total_feedings: s.totalFeedings, good_feedings: s.goodFeedings,
       }).catch(() => {});
     }
+    // Clear session but NOT nutripet_state — it has userId so it's safe
     localStorage.removeItem('nutripet_session');
-    localStorage.removeItem('nutripet_state');
     petStore.setState({
       loggedIn: false, userId: null, username: '', emoji: '🐱',
       health: 85, hunger: 70, energy: 80, sleeping: false,
