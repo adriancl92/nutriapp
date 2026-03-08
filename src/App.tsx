@@ -607,6 +607,8 @@ function CameraScanner({ onDetected, onClose }) {
   const [status, setStatus] = useState<'loading'|'live'|'detected'|'error'>('loading');
   const [errMsg, setErrMsg] = useState('');
   const [mode, setMode] = useState<'native'|'quagga'|null>(null);
+  const [torchOn, setTorchOn] = useState(false);
+  const [torchAvailable, setTorchAvailable] = useState(false);
   const streamRef = useRef<MediaStream|null>(null);
   const rafRef = useRef<number>(0);
   const quaggaStarted = useRef(false);
@@ -631,6 +633,17 @@ function CameraScanner({ onDetected, onClose }) {
     } catch {}
     setStatus('detected');
     setTimeout(() => onDetected(code), 450);
+  }
+
+  async function toggleTorch() {
+    if (!streamRef.current) return;
+    const track = streamRef.current.getVideoTracks()[0];
+    if (!track) return;
+    try {
+      const newVal = !torchOn;
+      await track.applyConstraints({ advanced: [{ torch: newVal } as any] });
+      setTorchOn(newVal);
+    } catch {}
   }
 
   function validateEAN(code: string): boolean {
@@ -666,6 +679,12 @@ function CameraScanner({ onDetected, onClose }) {
       }
       setStatus('live');
       setMode('native');
+      // Check torch support
+      const track = stream.getVideoTracks()[0];
+      if (track) {
+        const caps = track.getCapabilities() as any;
+        if (caps?.torch) setTorchAvailable(true);
+      }
       const detector = new (window as any).BarcodeDetector({
         formats: ['ean_13','ean_8','upc_a','upc_e','code_128','code_39','qr_code']
       });
@@ -705,6 +724,18 @@ function CameraScanner({ onDetected, onClose }) {
       }, (err: any) => {
         if (err) { setStatus('error'); setErrMsg('No se pudo acceder a la cámara. Permite el acceso en Ajustes → Cámara.'); return; }
         Q.start(); setStatus('live');
+        // Check torch on Quagga stream
+        try {
+          const tracks = (Q.CameraAccess?.getActiveStreamLabel
+            ? [] : (navigator.mediaDevices as any)._activeStream?.getVideoTracks?.() || []);
+          // Alternative: check via getUserMedia constraints
+          navigator.mediaDevices.getUserMedia({ video: { facingMode:'environment' } })
+            .then(s => {
+              const t = s.getVideoTracks()[0];
+              s.getTracks().forEach(tr => tr.stop()); // stop this extra stream
+              if ((t?.getCapabilities() as any)?.torch) setTorchAvailable(true);
+            }).catch(() => {});
+        } catch {}
       });
       Q.onDetected((result: any) => { confirmCode(result?.codeResult?.code); });
     }
@@ -835,7 +866,15 @@ function CameraScanner({ onDetected, onClose }) {
           </div>
         ) : (
           <>
-            <p style={{ color:'#555', fontSize:12, margin:0 }}>Detección automática</p>
+            <p style={{ color:'#555', fontSize:12, margin:0, flex:1 }}>Detección automática</p>
+            {torchAvailable && (
+              <button onClick={toggleTorch} style={{
+                width:44, height:44, borderRadius:'50%', border:'2px solid #333',
+                background: torchOn ? '#FFD700' : 'transparent',
+                color: torchOn ? '#333' : '#aaa', fontSize:20, cursor:'pointer',
+                marginRight:10, transition:'all 0.2s', display:'flex', alignItems:'center', justifyContent:'center'
+              }}>🔦</button>
+            )}
             <button onClick={handleClose} style={{ padding:'12px 20px', borderRadius:16, border:'2px solid #333', background:'transparent', color:'#aaa', fontWeight:700, cursor:'pointer', fontSize:14 }}>Cancelar</button>
           </>
         )}
@@ -1338,7 +1377,8 @@ function LoginScreen() {
         if (rawState) {
           const ls = JSON.parse(rawState);
           const supaTs = new Date(pet.updated_at).getTime();
-          if (ls.savedAt > supaTs) {
+          // Only use localStorage if it belongs to THIS user
+          if (ls.userId === user.id && ls.savedAt > supaTs) {
             const el = Math.min(Math.floor((Date.now() - ls.savedAt) / 1000), 7200);
             fH = ls.sleeping ? Math.min(100, ls.health + el*0.005) : Math.max(0, ls.health - el*0.015);
             fU = ls.sleeping ? Math.max(0, ls.hunger - el*0.008) : Math.max(0, ls.hunger - el*0.05);
@@ -2252,7 +2292,11 @@ export default function NutriPet() {
         let localState: any = null;
         try {
           const raw = localStorage.getItem('nutripet_state');
-          if (raw) localState = JSON.parse(raw);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            // Only use if it belongs to this user
+            if (!parsed.userId || parsed.userId === pet.userId) localState = parsed;
+          }
         } catch {}
 
         if (localState) {
@@ -2414,6 +2458,7 @@ export default function NutriPet() {
     // Always save to localStorage immediately (fast, no network)
     try {
       localStorage.setItem('nutripet_state', JSON.stringify({
+        userId: state.userId,
         health: state.health,
         hunger: state.hunger,
         energy: state.energy,
@@ -2526,6 +2571,15 @@ export default function NutriPet() {
 
   function handleLogout() {
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    // Force immediate Supabase save before logout so data is persisted
+    const s = petStore.getState();
+    if (s.userId) {
+      db.savePet(s.userId, {
+        health: s.health, hunger: s.hunger, energy: s.energy,
+        sleeping: s.sleeping, mood: s.mood, last_food: s.lastFood,
+        total_feedings: s.totalFeedings, good_feedings: s.goodFeedings,
+      }).catch(() => {});
+    }
     localStorage.removeItem('nutripet_session');
     localStorage.removeItem('nutripet_state');
     petStore.setState({
