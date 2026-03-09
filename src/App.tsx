@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 // ─── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 const SUPA_URL = 'https://qalhzbfbvbcnriatzgtn.supabase.co';
@@ -316,8 +316,8 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
   const tired = mood === 'tired' || health < 40;
   const body = sick ? '#c0c0c0' : health > 60 ? '#FFB3C6' : '#f0c0a0';
   const cheek = sick ? '#b0b0b0' : '#ff8fab';
-  const [tapAnim, setTapAnim] = React.useState(false);
-  const [hearts, setHearts] = React.useState<number[]>([]);
+  const [tapAnim, setTapAnim] = useState(false);
+  const [hearts, setHearts] = useState<number[]>([]);
   function handleTap() {
     if (sleeping || sick) return;
     setTapAnim(true);
@@ -327,7 +327,7 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
     setTimeout(() => setHearts(h => h.filter(x => x !== id)), 1000);
   }
   return (
-    <div style={{ position: 'relative', width: 160, height: 160 }} onClick={handleTap} onTouchEnd={e => { e.preventDefault(); handleTap(); }} style={{ cursor: sleeping || sick ? 'default' : 'pointer' }}>
+    <div style={{ position: 'relative', width: 160, height: 160, cursor: sleeping || sick ? 'default' : 'pointer' }} onClick={handleTap} onTouchEnd={e => { e.preventDefault(); handleTap(); }}>
       {hearts.map(id => (
         <div key={id} style={{ position:'absolute', top:-20, left:'50%', transform:'translateX(-50%)', fontSize:20, animation:'heartFloat 1s ease-out forwards', pointerEvents:'none', zIndex:10 }}>💕</div>
       ))}
