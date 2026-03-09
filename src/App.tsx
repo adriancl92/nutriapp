@@ -317,19 +317,36 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
   const body = sick ? '#c0c0c0' : health > 60 ? '#FFB3C6' : '#f0c0a0';
   const cheek = sick ? '#b0b0b0' : '#ff8fab';
   const [tapAnim, setTapAnim] = useState(false);
-  const [hearts, setHearts] = useState<number[]>([]);
+  const [tapEmoji, setTapEmoji] = useState('💕');
+  const [hearts, setHearts] = useState<{id:number, emoji:string, x:number}[]>([]);
+  const tapCooldown = useRef(false);
   function handleTap() {
-    if (sleeping || sick) return;
+    if (tapCooldown.current) return;
+    tapCooldown.current = true;
+    setTimeout(() => { tapCooldown.current = false; }, 400);
+    // Different reaction based on state
+    let emoji = '💕';
+    if (sleeping) { emoji = '💤'; }
+    else if (sick) { emoji = '🤒'; }
+    else if (tired) { emoji = '😴'; }
+    else {
+      const options = ['💕','⭐','✨','💖','🌟','😻'];
+      emoji = options[Math.floor(Math.random() * options.length)];
+    }
     setTapAnim(true);
     const id = Date.now();
-    setHearts(h => [...h, id]);
+    const x = 30 + Math.random() * 100; // random horizontal position
+    setHearts(h => [...h, { id, emoji, x }]);
     setTimeout(() => setTapAnim(false), 600);
-    setTimeout(() => setHearts(h => h.filter(x => x !== id)), 1000);
+    setTimeout(() => setHearts(h => h.filter(p => p.id !== id)), 1000);
   }
   return (
-    <div style={{ position: 'relative', width: 160, height: 160, cursor: sleeping || sick ? 'default' : 'pointer' }} onClick={handleTap} onTouchEnd={e => { e.preventDefault(); handleTap(); }}>
-      {hearts.map(id => (
-        <div key={id} style={{ position:'absolute', top:-20, left:'50%', transform:'translateX(-50%)', fontSize:20, animation:'heartFloat 1s ease-out forwards', pointerEvents:'none', zIndex:10 }}>💕</div>
+    <div
+      style={{ position: 'relative', width: 160, height: 160, cursor: 'pointer', userSelect: 'none', WebkitUserSelect: 'none' } as any}
+      onPointerDown={e => { e.preventDefault(); handleTap(); }}
+    >
+      {hearts.map(({ id, emoji, x }) => (
+        <div key={id} style={{ position:'absolute', top:-10, left: x, fontSize:22, animation:'heartFloat 0.9s ease-out forwards', pointerEvents:'none', zIndex:10 }}>{emoji}</div>
       ))}
       {!sick && (
         <div
