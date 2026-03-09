@@ -179,6 +179,9 @@ const _savedSession = (() => {
   } catch { return null; }
 })();
 
+// Expose db for global decay interval
+if (typeof window !== 'undefined') (window as any).__nutriDB = db;
+
 const petStore = createStore({
   loggedIn: false,
   userId: _savedSession?.userId || null,
@@ -202,6 +205,51 @@ function usePetStore() {
   useEffect(() => petStore.subscribe(set), []);
   return s;
 }
+
+// ─── GLOBAL DECAY (runs outside React, never recreated) ───────────────────────
+let _saveTimer: any = null;
+setInterval(() => {
+  const s = petStore.getState();
+  if (!s.loggedIn || !s.userId) return;
+  let next: any;
+  if (s.sleeping) {
+    next = {
+      energy: Math.min(100, s.energy + 0.3),
+      health: Math.min(100, s.health + 0.04),
+      hunger: Math.max(0, s.hunger - 0.02),
+    };
+  } else {
+    const h = Math.max(0, s.health - 0.025);
+    const u = Math.max(0, s.hunger - 0.05);
+    const e = Math.max(0, s.energy - 0.03);
+    let mood = 'happy';
+    if (h < 20) mood = 'sick';
+    else if (e < 25 || u < 20) mood = 'tired';
+    next = { health: h, hunger: u, energy: e, mood };
+  }
+  const merged = { ...s, ...next };
+  try {
+    localStorage.setItem('nutripet_state', JSON.stringify({
+      userId: merged.userId,
+      health: merged.health, hunger: merged.hunger, energy: merged.energy,
+      sleeping: merged.sleeping, mood: merged.mood, lastFood: merged.lastFood,
+      totalFeedings: merged.totalFeedings, goodFeedings: merged.goodFeedings,
+      savedAt: Date.now(),
+    }));
+  } catch {}
+  // Debounce Supabase
+  if (_saveTimer) clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => {
+    if (!merged.userId) return;
+    const db2 = (window as any).__nutriDB;
+    if (db2) db2.savePet(merged.userId, {
+      health: merged.health, hunger: merged.hunger, energy: merged.energy,
+      sleeping: merged.sleeping, mood: merged.mood, last_food: merged.lastFood,
+      total_feedings: merged.totalFeedings, good_feedings: merged.goodFeedings,
+    }).catch(() => {});
+  }, 10000);
+  petStore.setState(next);
+}, 1000);
 
 // ─── NUTRI CONFIG ─────────────────────────────────────────────────────────────
 const NC = {
@@ -268,8 +316,21 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
   const tired = mood === 'tired' || health < 40;
   const body = sick ? '#c0c0c0' : health > 60 ? '#FFB3C6' : '#f0c0a0';
   const cheek = sick ? '#b0b0b0' : '#ff8fab';
+  const [tapAnim, setTapAnim] = React.useState(false);
+  const [hearts, setHearts] = React.useState<number[]>([]);
+  function handleTap() {
+    if (sleeping || sick) return;
+    setTapAnim(true);
+    const id = Date.now();
+    setHearts(h => [...h, id]);
+    setTimeout(() => setTapAnim(false), 600);
+    setTimeout(() => setHearts(h => h.filter(x => x !== id)), 1000);
+  }
   return (
-    <div style={{ position: 'relative', width: 160, height: 160 }}>
+    <div style={{ position: 'relative', width: 160, height: 160 }} onClick={handleTap} onTouchEnd={e => { e.preventDefault(); handleTap(); }} style={{ cursor: sleeping || sick ? 'default' : 'pointer' }}>
+      {hearts.map(id => (
+        <div key={id} style={{ position:'absolute', top:-20, left:'50%', transform:'translateX(-50%)', fontSize:20, animation:'heartFloat 1s ease-out forwards', pointerEvents:'none', zIndex:10 }}>💕</div>
+      ))}
       {!sick && (
         <div
           style={{
@@ -290,6 +351,8 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
           transition: 'filter 0.5s',
           animation: feedAnim
             ? 'bounce 0.4s ease'
+            : tapAnim
+            ? 'tapBounce 0.6s cubic-bezier(.34,1.56,.64,1)'
             : sleeping
             ? 'none'
             : 'float 3s ease-in-out infinite',
@@ -486,6 +549,64 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
           <circle cx="122" cy="102" r="1.5" fill="white"/>
           <circle cx="120" cy="108" r="1" fill="white"/>
         </>}
+        {equipped.includes('hat_chef') && <>
+          <ellipse cx="80" cy="36" rx="28" ry="7" fill="#ddd" opacity="0.95"/>
+          <ellipse cx="80" cy="22" rx="20" ry="18" fill="white" opacity="0.95"/>
+          <ellipse cx="63" cy="28" rx="10" ry="14" fill="white" opacity="0.9"/>
+          <ellipse cx="97" cy="28" rx="10" ry="14" fill="white" opacity="0.9"/>
+          <line x1="66" y1="30" x2="66" y2="38" stroke="#ddd" strokeWidth="1.5"/>
+          <line x1="94" y1="30" x2="94" y2="38" stroke="#ddd" strokeWidth="1.5"/>
+        </>}
+        {equipped.includes('hat_santa') && <>
+          <ellipse cx="80" cy="37" rx="30" ry="7" fill="white" opacity="0.95"/>
+          <polygon points="80,2 100,38 60,38" fill="#cc0000"/>
+          <circle cx="80" cy="2" r="6" fill="white"/>
+          <ellipse cx="80" cy="37" rx="30" ry="7" fill="white" opacity="0.9"/>
+        </>}
+        {equipped.includes('glasses_star') && <>
+          <path d="M61,68 L57,62 L53,68 L59,72 L53,76 L57,82 L61,76 L65,82 L69,76 L63,72 L69,68 L65,62 Z" fill="#FFD700" opacity="0.9"/>
+          <path d="M99,68 L95,62 L91,68 L97,72 L91,76 L95,82 L99,76 L103,82 L107,76 L101,72 L107,68 L103,62 Z" fill="#FFD700" opacity="0.9"/>
+          <line x1="69" y1="72" x2="91" y2="72" stroke="#FFD700" strokeWidth="2.5"/>
+          <line x1="38" y1="72" x2="53" y2="72" stroke="#FFD700" strokeWidth="2"/>
+          <line x1="107" y1="72" x2="122" y2="72" stroke="#FFD700" strokeWidth="2"/>
+        </>}
+        {equipped.includes('glasses_3d') && <>
+          <rect x="48" y="66" width="24" height="15" rx="4" fill="#cc0000" opacity="0.85"/>
+          <rect x="88" y="66" width="24" height="15" rx="4" fill="#0044cc" opacity="0.85"/>
+          <line x1="72" y1="73" x2="88" y2="73" stroke="#555" strokeWidth="2.5"/>
+          <line x1="36" y1="73" x2="48" y2="73" stroke="#555" strokeWidth="2"/>
+          <line x1="112" y1="73" x2="124" y2="73" stroke="#555" strokeWidth="2"/>
+        </>}
+        {equipped.includes('cape_space') && <>
+          <path d="M30 100 Q20 135 35 155 Q80 165 125 155 Q140 135 130 100" fill="#0d0d2b" opacity="0.9"/>
+          <circle cx="55" cy="125" r="2" fill="white" opacity="0.8"/>
+          <circle cx="80" cy="118" r="1.5" fill="white" opacity="0.7"/>
+          <circle cx="105" cy="130" r="2" fill="white" opacity="0.8"/>
+          <circle cx="68" cy="145" r="1.5" fill="white" opacity="0.6"/>
+          <circle cx="95" cy="142" r="2" fill="white" opacity="0.7"/>
+          <circle cx="45" cy="142" r="1" fill="#FFD700" opacity="0.9"/>
+          <circle cx="115" cy="118" r="1" fill="#FFD700" opacity="0.9"/>
+          <text x="68" y="138" fontSize="14" fill="#aad4ff">🚀</text>
+        </>}
+        {equipped.includes('badge_shield') && <>
+          <path d="M106 95 L130 102 L130 118 Q130 128 118 133 L106 137 L94 133 Q82 128 82 118 L82 102 Z" fill="#3a86ff" opacity="0.9"/>
+          <path d="M106 100 L124 106 L124 119 Q124 126 114 130 L106 133 L98 130 Q88 126 88 119 L88 106 Z" fill="#5ba4ff" opacity="0.7"/>
+          <text x="99" y="122" fontSize="14" fill="white">★</text>
+        </>}
+        {equipped.includes('badge_leaf') && <>
+          <circle cx="25" cy="105" r="13" fill="#2d6a2d" opacity="0.9"/>
+          <path d="M18 105 Q25 92 32 105 Q25 118 18 105 Z" fill="#4caf50"/>
+          <line x1="25" y1="105" x2="25" y2="115" stroke="#2d6a2d" strokeWidth="2"/>
+        </>}
+        {equipped.includes('hat_flower') && <>
+          <ellipse cx="80" cy="36" rx="28" ry="7" fill="#ffb347" opacity="0.85"/>
+          <circle cx="80" cy="20" r="8" fill="#FFD700"/>
+          <ellipse cx="68" cy="14" rx="7" ry="5" fill="#FF6B9D" opacity="0.9" transform="rotate(-30 68 14)"/>
+          <ellipse cx="92" cy="14" rx="7" ry="5" fill="#FF6B9D" opacity="0.9" transform="rotate(30 92 14)"/>
+          <ellipse cx="62" cy="24" rx="7" ry="5" fill="#a855f7" opacity="0.9" transform="rotate(-60 62 24)"/>
+          <ellipse cx="98" cy="24" rx="7" ry="5" fill="#a855f7" opacity="0.9" transform="rotate(60 98 24)"/>
+          <circle cx="80" cy="20" r="4" fill="#ff9f00"/>
+        </>}
       </svg>
       {sleeping && (
         <div style={{ position: 'absolute', top: 0, right: -10 }}>
@@ -516,40 +637,31 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
 
 // ─── STAT BAR ─────────────────────────────────────────────────────────────────
 function StatBar({ label, value, icon, color }) {
+  const pct = Math.round(Math.max(0, Math.min(100, value)));
+  const isLow = pct < 25;
+  const isMid = pct >= 25 && pct < 50;
+  const barColor = isLow ? '#e74c3c' : isMid ? '#f39c12' : color;
   return (
     <div style={{ marginBottom: 8 }}>
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: 13,
-          marginBottom: 4,
-          fontWeight: 600,
-          color: '#555',
-        }}
-      >
-        <span>
-          {icon} {label}
+      <div style={{ display:'flex', justifyContent:'space-between', fontSize:13, marginBottom:4, fontWeight:600, color:'#555' }}>
+        <span>{icon} {label}</span>
+        <span style={{ color: barColor, fontWeight: 800 }}>
+          {pct}%
+          {isLow && <span style={{ marginLeft:4, animation:'pulse 1s ease-in-out infinite' }}>⚠️</span>}
         </span>
-        <span style={{ color }}>{Math.round(value)}%</span>
       </div>
-      <div
-        style={{
-          height: 14,
-          background: '#eee',
-          borderRadius: 99,
-          overflow: 'hidden',
-        }}
-      >
-        <div
-          style={{
-            height: '100%',
-            width: `${value}%`,
-            background: `linear-gradient(90deg,${color}cc,${color})`,
-            borderRadius: 99,
-            transition: 'width 0.6s cubic-bezier(.34,1.56,.64,1)',
-          }}
-        />
+      <div style={{ height:14, background:'#eee', borderRadius:99, overflow:'hidden' }}>
+        <div style={{
+          height:'100%',
+          width:`${pct}%`,
+          background: isLow
+            ? 'linear-gradient(90deg,#c0392b,#e74c3c)'
+            : isMid
+            ? 'linear-gradient(90deg,#e67e22,#f39c12)'
+            : `linear-gradient(90deg,${color}cc,${color})`,
+          borderRadius:99,
+          transition:'width 0.8s cubic-bezier(.34,1.56,.64,1), background 0.5s',
+        }}/>
       </div>
     </div>
   );
@@ -2064,6 +2176,15 @@ const ACCESSORIES: Record<string, { icon:string, label:string, unlockId:string, 
   'cape_rainbow': { icon:'🌈', label:'Capa arcoíris',    unlockId:'all_scores',     type:'cape'    },
   'badge_fire':   { icon:'🔥', label:'Placa de fuego',   unlockId:'speed_scan',     type:'cape'    },
   'badge_moon':   { icon:'🌙', label:'Placa lunar',      unlockId:'night_owl',      type:'cape'    },
+  // New accessories
+  'hat_chef':     { icon:'👨‍🍳', label:'Gorro chef',       unlockId:'first_scan',     type:'hat'     },
+  'hat_santa':    { icon:'🎅', label:'Gorro Navidad',     unlockId:'scan_10',        type:'hat'     },
+  'glasses_star': { icon:'🤩', label:'Gafas estrella',    unlockId:'perfect_day',    type:'glasses' },
+  'glasses_3d':   { icon:'🎬', label:'Gafas 3D',          unlockId:'explorer',       type:'glasses' },
+  'cape_space':   { icon:'🚀', label:'Capa espacial',     unlockId:'scan_50',        type:'cape'    },
+  'badge_shield': { icon:'🛡️', label:'Escudo protector', unlockId:'pet_max',        type:'cape'    },
+  'badge_leaf':   { icon:'🌿', label:'Placa eco',         unlockId:'healthy_streak', type:'cape'    },
+  'hat_flower':   { icon:'🌸', label:'Gorro flores',      unlockId:'healthy_5',      type:'hat'     },
 };
 
 // ─── ACHIEVEMENT TOAST ─────────────────────────────────────────────────────────
@@ -2364,6 +2485,7 @@ export default function NutriPet() {
   const [equippedAcc, setEquippedAcc] = useState<string[]>([]);
   const [unlockedAcc, setUnlockedAcc] = useState<string[]>([]);
   const saveTimer = useRef(null);
+  const recentScans = useRef<{barcode: string, time: number}[]>([]);
   const scanTimes = useRef<number[]>([]);
 
   // Auto-restore session on page reload
@@ -2554,53 +2676,7 @@ export default function NutriPet() {
     }, 10000);
   }
 
-  // Time decay
-  useEffect(() => {
-    if (!pet.loggedIn) return;
-    const id = setInterval(() => {
-      petStore.setState((s) => {
-        if (!s.loggedIn || !s.userId) return s;
-        let next;
-        if (s.sleeping) {
-          next = {
-            energy: Math.min(100, s.energy + 0.3),
-            health: Math.min(100, s.health + 0.04),
-            hunger: Math.max(0, s.hunger - 0.02),
-          };
-        } else {
-          const h = Math.max(0, s.health - 0.025);
-          const u = Math.max(0, s.hunger - 0.05);
-          const e = Math.max(0, s.energy - 0.03);
-          let mood = 'happy';
-          if (h < 20) mood = 'sick';
-          else if (e < 25 || u < 20) mood = 'tired';
-          next = { health: h, hunger: u, energy: e, mood };
-        }
-        // Save directly here with the full merged state — no risk of missing userId
-        const merged = { ...s, ...next };
-        try {
-          localStorage.setItem('nutripet_state', JSON.stringify({
-            userId: merged.userId,
-            health: merged.health,
-            hunger: merged.hunger,
-            energy: merged.energy,
-            sleeping: merged.sleeping,
-            mood: merged.mood,
-            lastFood: merged.lastFood,
-            totalFeedings: merged.totalFeedings,
-            goodFeedings: merged.goodFeedings,
-            savedAt: Date.now(),
-          }));
-        } catch {}
-        scheduleSave(merged);
-        return next;
-      });
-    }, 1000);
-    return () => {
-      clearInterval(id);
-      if (saveTimer.current) clearTimeout(saveTimer.current);
-    };
-  }, [pet.loggedIn]);
+  // Time decay runs in global interval (outside React) — see top of file
 
   // Warnings
   useEffect(() => {
@@ -2621,6 +2697,17 @@ export default function NutriPet() {
   }
 
   async function handleFeed(product) {
+    // Block same product more than 2x in 5 minutes
+    const now = Date.now();
+    const WINDOW = 5 * 60 * 1000; // 5 min
+    const barcode = product.barcode || product.name;
+    recentScans.current = recentScans.current.filter(s => now - s.time < WINDOW);
+    const timesInWindow = recentScans.current.filter(s => s.barcode === barcode).length;
+    if (timesInWindow >= 2) {
+      showN(`🚫 ¡Ya le diste ${product.name} dos veces! Espera un poco antes de repetir.`);
+      return;
+    }
+    recentScans.current.push({ barcode, time: now });
     const cfg = getNC(product.score);
     petStore.setState((s) => {
       const next = {
@@ -2732,6 +2819,8 @@ export default function NutriPet() {
       <style>{`
         @keyframes float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
         @keyframes bounce{0%,100%{transform:scale(1)}50%{transform:scale(1.12)}}
+        @keyframes tapBounce{0%{transform:scale(1) rotate(0deg)}25%{transform:scale(1.18) rotate(-8deg)}50%{transform:scale(1.22) rotate(8deg)}75%{transform:scale(1.1) rotate(-4deg)}100%{transform:scale(1) rotate(0deg)}}
+        @keyframes heartFloat{0%{opacity:1;transform:translateX(-50%) translateY(0) scale(0.5)}50%{opacity:1;transform:translateX(-50%) translateY(-30px) scale(1.2)}100%{opacity:0;transform:translateX(-50%) translateY(-60px) scale(0.8)}}
         @keyframes pulse{0%,100%{opacity:.6;transform:scale(1)}50%{opacity:1;transform:scale(1.05)}}
         @keyframes wag{0%,100%{transform:rotate(-8deg)}50%{transform:rotate(8deg)}}
         @keyframes slideUp{from{opacity:0;transform:translateY(30px)}to{opacity:1;transform:translateY(0)}}
