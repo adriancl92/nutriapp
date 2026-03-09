@@ -1422,6 +1422,7 @@ function LoginScreen() {
       }
       // Apply offline time decay
       let pet = await db.getPet(user.id);
+      console.log('[LOGIN] Datos de Supabase:', JSON.stringify(pet));
       if (!pet) pet = await db.createPet(user.id);
       const elapsed = Math.min(
         Math.floor((Date.now() - new Date(pet.updated_at).getTime()) / 1000),
@@ -1444,19 +1445,30 @@ function LoginScreen() {
       let fTotal = pet.total_feedings, fGood = pet.good_feedings;
       try {
         const rawState = localStorage.getItem('nutripet_state');
+        console.log('[LOGIN] nutripet_state en localStorage:', rawState);
+        console.log('[LOGIN] userId del usuario:', user.id);
         if (rawState) {
           const ls = JSON.parse(rawState);
+          console.log('[LOGIN] userId en localStorage:', ls.userId);
+          console.log('[LOGIN] userId coincide:', ls.userId === user.id);
           // Only use localStorage if it belongs to THIS user
           if (ls.userId === user.id) {
             // Use localStorage — it's always more up-to-date than Supabase
             // Apply decay since last save
             const el = Math.min(Math.floor((Date.now() - ls.savedAt) / 1000), 7200);
+            console.log('[LOGIN] Segundos desde logout:', el);
+            console.log('[LOGIN] Valores en LS — health:', ls.health, 'hunger:', ls.hunger, 'energy:', ls.energy);
             fH = ls.sleeping ? Math.min(100, ls.health + el*0.005) : Math.max(0, ls.health - el*0.015);
             fU = ls.sleeping ? Math.max(0, ls.hunger - el*0.008) : Math.max(0, ls.hunger - el*0.05);
             fE = ls.sleeping ? Math.min(100, ls.energy + el*0.025) : Math.max(0, ls.energy - el*0.03);
             fSleep = ls.sleeping; fMood = ls.mood; fFood = ls.lastFood;
             fTotal = ls.totalFeedings; fGood = ls.goodFeedings;
+            console.log('[LOGIN] Valores finales — health:', fH, 'hunger:', fU, 'energy:', fE);
+          } else {
+            console.warn('[LOGIN] userId no coincide, usando Supabase. LS userId:', ls.userId, 'user.id:', user.id);
           }
+        } else {
+          console.warn('[LOGIN] No hay nutripet_state en localStorage, usando Supabase');
         }
       } catch {}
 
@@ -2525,21 +2537,6 @@ export default function NutriPet() {
   // Debounced save to Supabase
   function scheduleSave(state) {
     if (!state.userId) return;
-    // Always save to localStorage immediately (fast, no network)
-    try {
-      localStorage.setItem('nutripet_state', JSON.stringify({
-        userId: state.userId,
-        health: state.health,
-        hunger: state.hunger,
-        energy: state.energy,
-        sleeping: state.sleeping,
-        mood: state.mood,
-        lastFood: state.lastFood,
-        totalFeedings: state.totalFeedings,
-        goodFeedings: state.goodFeedings,
-        savedAt: Date.now(),
-      }));
-    } catch {}
     // Debounce Supabase save to max once every 10s
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
@@ -2562,7 +2559,7 @@ export default function NutriPet() {
     if (!pet.loggedIn) return;
     const id = setInterval(() => {
       petStore.setState((s) => {
-        if (!s.loggedIn) return s;
+        if (!s.loggedIn || !s.userId) return s;
         let next;
         if (s.sleeping) {
           next = {
@@ -2579,7 +2576,23 @@ export default function NutriPet() {
           else if (e < 25 || u < 20) mood = 'tired';
           next = { health: h, hunger: u, energy: e, mood };
         }
-        scheduleSave({ ...s, ...next });
+        // Save directly here with the full merged state — no risk of missing userId
+        const merged = { ...s, ...next };
+        try {
+          localStorage.setItem('nutripet_state', JSON.stringify({
+            userId: merged.userId,
+            health: merged.health,
+            hunger: merged.hunger,
+            energy: merged.energy,
+            sleeping: merged.sleeping,
+            mood: merged.mood,
+            lastFood: merged.lastFood,
+            totalFeedings: merged.totalFeedings,
+            goodFeedings: merged.goodFeedings,
+            savedAt: Date.now(),
+          }));
+        } catch {}
+        scheduleSave(merged);
         return next;
       });
     }, 1000);
@@ -2646,14 +2659,18 @@ export default function NutriPet() {
       // Save final state to localStorage BEFORE clearing session
       // so it survives logout and can be restored on next login
       try {
-        localStorage.setItem('nutripet_state', JSON.stringify({
+        const stateToSave = {
           userId: s.userId,
           health: s.health, hunger: s.hunger, energy: s.energy,
           sleeping: s.sleeping, mood: s.mood, lastFood: s.lastFood,
           totalFeedings: s.totalFeedings, goodFeedings: s.goodFeedings,
           savedAt: Date.now(),
-        }));
-      } catch {}
+        };
+        console.log('[LOGOUT] Guardando estado:', JSON.stringify(stateToSave));
+        localStorage.setItem('nutripet_state', JSON.stringify(stateToSave));
+        const verify = localStorage.getItem('nutripet_state');
+        console.log('[LOGOUT] Verificacion localStorage:', verify);
+      } catch (err) { console.error('[LOGOUT] Error al guardar:', err); }
       // Also save to Supabase (fire and forget)
       db.savePet(s.userId, {
         health: s.health, hunger: s.hunger, energy: s.energy,
