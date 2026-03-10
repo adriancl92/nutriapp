@@ -1,5 +1,117 @@
 import React, { useState, useEffect, useRef } from 'react';
 
+// ─── AUDIO ENGINE ──────────────────────────────────────────────────────────────
+let _audioCtx: AudioContext | null = null;
+let _bgGain: GainNode | null = null;
+let _bgPlaying = false;
+let _musicMuted = false;
+
+function getAudioCtx(): AudioContext {
+  if (!_audioCtx) {
+    _audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  }
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+
+// Tamagotchi-style looping melody using oscillators
+function startBgMusic() {
+  if (_bgPlaying || _musicMuted) return;
+  try {
+    const ctx = getAudioCtx();
+    _bgGain = ctx.createGain();
+    _bgGain.gain.setValueAtTime(0, ctx.currentTime);
+    _bgGain.gain.linearRampToValueAtTime(0.07, ctx.currentTime + 1.5);
+    _bgGain.connect(ctx.destination);
+
+    // Simple pentatonic melody — gentle & looping
+    const notes = [523, 659, 784, 659, 523, 392, 440, 523, 659, 784, 880, 784, 659, 523, 440, 392];
+    const dur = 0.35;
+    let t = ctx.currentTime + 0.5;
+
+    function scheduleMelody() {
+      if (!_bgGain || _musicMuted) return;
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+        g.gain.setValueAtTime(0, t + i * dur);
+        g.gain.linearRampToValueAtTime(1, t + i * dur + 0.04);
+        g.gain.exponentialRampToValueAtTime(0.001, t + i * dur + dur * 0.85);
+        osc.connect(g); g.connect(_bgGain!);
+        osc.start(t + i * dur);
+        osc.stop(t + i * dur + dur);
+      });
+      // Schedule next loop
+      const loopDuration = notes.length * dur;
+      setTimeout(scheduleMelody, (loopDuration - 0.5) * 1000);
+      t += loopDuration;
+    }
+    scheduleMelody();
+    _bgPlaying = true;
+  } catch {}
+}
+
+function stopBgMusic() {
+  if (!_bgGain) return;
+  try {
+    const ctx = getAudioCtx();
+    _bgGain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.8);
+    _bgPlaying = false;
+  } catch {}
+}
+
+function toggleMusic(): boolean {
+  _musicMuted = !_musicMuted;
+  if (_musicMuted) stopBgMusic();
+  else startBgMusic();
+  return !_musicMuted;
+}
+
+// Sound effects
+function playSfx(type: 'feed_good' | 'feed_bad' | 'tap' | 'sleep' | 'wake' | 'achievement' | 'blocked') {
+  try {
+    const ctx = getAudioCtx();
+    const sequences: Record<string, {f:number,d:number,t:number,type?:OscillatorType}[]> = {
+      feed_good: [
+        {f:523,d:0.1,t:0},{f:659,d:0.1,t:0.1},{f:784,d:0.15,t:0.2},{f:1047,d:0.2,t:0.35}
+      ],
+      feed_bad: [
+        {f:300,d:0.15,t:0,type:'sawtooth'},{f:200,d:0.2,t:0.15,type:'sawtooth'}
+      ],
+      tap: [
+        {f:880,d:0.06,t:0},{f:1100,d:0.08,t:0.06}
+      ],
+      sleep: [
+        {f:440,d:0.2,t:0},{f:330,d:0.25,t:0.2},{f:220,d:0.3,t:0.45}
+      ],
+      wake: [
+        {f:330,d:0.1,t:0},{f:440,d:0.1,t:0.1},{f:550,d:0.15,t:0.2}
+      ],
+      achievement: [
+        {f:523,d:0.08,t:0},{f:659,d:0.08,t:0.08},{f:784,d:0.08,t:0.16},
+        {f:1047,d:0.08,t:0.24},{f:1319,d:0.25,t:0.32}
+      ],
+      blocked: [
+        {f:250,d:0.1,t:0,type:'square'},{f:200,d:0.15,t:0.1,type:'square'}
+      ],
+    };
+    const seq = sequences[type] || [];
+    seq.forEach(({f,d,t,type:oscType}) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = oscType || 'sine';
+      osc.frequency.value = f;
+      g.gain.setValueAtTime(0.18, ctx.currentTime + t);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + d);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(ctx.currentTime + t);
+      osc.stop(ctx.currentTime + t + d + 0.05);
+    });
+  } catch {}
+}
+
 // ─── SUPABASE CONFIG ──────────────────────────────────────────────────────────
 const SUPA_URL = 'https://qalhzbfbvbcnriatzgtn.supabase.co';
 const SUPA_KEY =
@@ -324,6 +436,7 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
     if (tapCooldown.current) return;
     tapCooldown.current = true;
     setTimeout(() => { tapCooldown.current = false; }, 400);
+    playSfx('tap');
     // Different reaction based on state
     let emoji = '💕';
     if (sleeping) { emoji = '💤'; }
@@ -1607,6 +1720,8 @@ function LoginScreen() {
         mood: fMood, lastFood: fFood, totalFeedings: fTotal, goodFeedings: fGood,
         _pendingRestore: false,
       });
+      // Start background music on login
+      setTimeout(() => startBgMusic(), 500);
     } catch (e) {
       setErr('Error de conexión. Comprueba tu internet.');
     }
@@ -2503,6 +2618,7 @@ export default function NutriPet() {
   const [unlockedAcc, setUnlockedAcc] = useState<string[]>([]);
   const saveTimer = useRef(null);
   const recentScans = useRef<{barcode: string, time: number}[]>([]);
+  const [musicOn, setMusicOn] = useState(true);
   const scanTimes = useRef<number[]>([]);
 
   // Auto-restore session on page reload
@@ -2669,7 +2785,7 @@ export default function NutriPet() {
       }
 
       const ach = ACHIEVEMENTS.find(a => a.id === id);
-      if (ach) { setNewAch(ach); break; } // mostrar uno a la vez
+      if (ach) { playSfx('achievement'); setNewAch(ach); break; } // mostrar uno a la vez
     }
   }
 
@@ -2721,11 +2837,16 @@ export default function NutriPet() {
     recentScans.current = recentScans.current.filter(s => now - s.time < WINDOW);
     const timesInWindow = recentScans.current.filter(s => s.barcode === barcode).length;
     if (timesInWindow >= 2) {
+      playSfx('blocked');
       showN(`🚫 ¡Ya le diste ${product.name} dos veces! Espera un poco antes de repetir.`);
       return;
     }
     recentScans.current.push({ barcode, time: now });
     const cfg = getNC(product.score);
+    // Play sound based on score
+    const _sc = (product.score || '').toLowerCase();
+    if (['a','b'].includes(_sc)) playSfx('feed_good');
+    else playSfx('feed_bad');
     petStore.setState((s) => {
       const next = {
         health: Math.max(0, Math.min(100, s.health + cfg.healthDelta)),
@@ -2783,6 +2904,7 @@ export default function NutriPet() {
       }).catch(() => {});
     }
     // Clear session but NOT nutripet_state — it has userId so it's safe
+    stopBgMusic();
     localStorage.removeItem('nutripet_session');
     petStore.setState({
       loggedIn: false, userId: null, username: '', emoji: '🐱',
@@ -2886,6 +3008,7 @@ export default function NutriPet() {
               { icon:'🏆', onClick:() => setShowAchievements(true), title:'Logros', badge: unlockedAch.length },
               { icon:'🎨', onClick:() => setShowAccessories(true), title:'Accesorios' },
               { icon:'📊', onClick:() => setShowStatsScreen(true), title:'Estadísticas' },
+              { icon: musicOn ? '🔊' : '🔇', onClick:() => { const on = toggleMusic(); setMusicOn(on); }, title: musicOn ? 'Silenciar música' : 'Activar música' },
               { icon:'🚪', onClick:handleLogout, title:'Salir' },
             ].map(btn => (
               <button key={btn.icon} onClick={btn.onClick} title={btn.title} style={{ position:'relative', width:38, height:38, borderRadius:12, background: dark ? 'rgba(255,255,255,0.1)' : 'rgba(255,255,255,0.7)', border:'none', cursor:'pointer', fontSize:16, backdropFilter:'blur(10px)' }}>
@@ -3109,9 +3232,10 @@ export default function NutriPet() {
             </p>
           </div>
           <button
-            onClick={() =>
-              petStore.setState((s) => ({ sleeping: !s.sleeping }))
-            }
+            onClick={() => {
+              playSfx(petStore.getState().sleeping ? 'wake' : 'sleep');
+              petStore.setState((s) => ({ sleeping: !s.sleeping }));
+            }}
             style={{
               width: 56,
               height: 30,
