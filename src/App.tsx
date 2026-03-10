@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 let _audioCtx: AudioContext | null = null;
 let _bgGain: GainNode | null = null;
 let _bgPlaying = false;
-let _musicMuted = false;
+let _musicMuted = true; // starts muted — user must activate
 
 function getAudioCtx(): AudioContext {
   if (!_audioCtx) {
@@ -71,6 +71,8 @@ function toggleMusic(): boolean {
 
 // Sound effects
 function playSfx(type: 'feed_good' | 'feed_bad' | 'tap' | 'sleep' | 'wake' | 'achievement' | 'blocked') {
+  // tap always plays; other sfx only when not muted
+  if (_musicMuted && type !== 'tap') return;
   try {
     const ctx = getAudioCtx();
     const sequences: Record<string, {f:number,d:number,t:number,type?:OscillatorType}[]> = {
@@ -1720,8 +1722,7 @@ function LoginScreen() {
         mood: fMood, lastFood: fFood, totalFeedings: fTotal, goodFeedings: fGood,
         _pendingRestore: false,
       });
-      // Start background music on login
-      setTimeout(() => startBgMusic(), 500);
+      // Music stays muted until user taps 🔇 button
     } catch (e) {
       setErr('Error de conexión. Comprueba tu internet.');
     }
@@ -2618,7 +2619,7 @@ export default function NutriPet() {
   const [unlockedAcc, setUnlockedAcc] = useState<string[]>([]);
   const saveTimer = useRef(null);
   const recentScans = useRef<{barcode: string, time: number}[]>([]);
-  const [musicOn, setMusicOn] = useState(true);
+  const [musicOn, setMusicOn] = useState(false); // starts muted
   const scanTimes = useRef<number[]>([]);
 
   // Auto-restore session on page reload
@@ -3173,7 +3174,7 @@ export default function NutriPet() {
                   : '#2d8a4e',
               }}
             >
-              {dark
+              {pet.sleeping
                 ? '😴 Durmiendo...'
                 : pet.health < 20
                 ? '🤒 ¡Necesita comida sana!'
@@ -3219,7 +3220,7 @@ export default function NutriPet() {
                 color: dark ? '#7ec8e3' : '#444',
               }}
             >
-              {dark ? '💤 Modo Descanso' : '☀️ Modo Activo'}
+              {pet.sleeping ? '💤 Modo Descanso' : '☀️ Modo Activo'}
             </p>
             <p
               style={{
@@ -3228,7 +3229,7 @@ export default function NutriPet() {
                 color: dark ? '#5a7a9a' : '#999',
               }}
             >
-              {dark ? 'Recuperando energía...' : '¡Listo para comer!'}
+              {pet.sleeping ? 'Recuperando energía...' : '¡Listo para comer!'}
             </p>
           </div>
           <button
