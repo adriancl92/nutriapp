@@ -1,5 +1,41 @@
 import React, { useState, useEffect, useRef } from 'react';
 
+// ─── ANALYTICS (PostHog) ──────────────────────────────────────────────────────
+(function() {
+  try {
+    const ph = (window as any).posthog;
+    if (ph) return; // already loaded
+    const script = document.createElement('script');
+    script.src = 'https://eu-assets.i.posthog.com/static/array.js';
+    script.async = true;
+    script.onload = () => {
+      (window as any).posthog.init('phc_o8Cp2yne3aQW2CEGLMovUm4p2bMwMJjNKhHjBkUytr9', {
+        api_host: 'https://eu.i.posthog.com',
+        person_profiles: 'identified_only',
+        autocapture: false, // manual events only — we control what's tracked
+        capture_pageview: true,
+      });
+    };
+    document.head.appendChild(script);
+  } catch {}
+})();
+
+function track(event: string, props?: Record<string, any>) {
+  try {
+    const ph = (window as any).posthog;
+    if (ph?.capture) ph.capture(event, props || {});
+  } catch {}
+}
+
+function identifyUser(userId: string, username: string) {
+  try {
+    const ph = (window as any).posthog;
+    if (ph?.identify) {
+      ph.identify(userId, { username });
+    }
+  } catch {}
+}
+
 // ─── AUDIO ENGINE ──────────────────────────────────────────────────────────────
 let _audioCtx: AudioContext | null = null;
 let _bgGain: GainNode | null = null;
@@ -119,11 +155,22 @@ const SUPA_URL = 'https://qalhzbfbvbcnriatzgtn.supabase.co';
 const SUPA_KEY =
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFhbGh6YmZidmJjbnJpYXR6Z3RuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI3NDg4MjMsImV4cCI6MjA4ODMyNDgyM30.KC-ZwGBviHBKuu0xWqvyDIUZGIJj8aa9E9gT_7yv5TQ';
 
+// Current session user_id — set on login, cleared on logout
+let _currentUserId: string | null = null;
+
 const db = {
-  headers: {
-    'Content-Type': 'application/json',
-    apikey: SUPA_KEY,
-    Authorization: `Bearer ${SUPA_KEY}`,
+  // Dynamic headers — includes app.user_id for RLS
+  get headers() {
+    const h: Record<string, string> = {
+      'Content-Type': 'application/json',
+      apikey: SUPA_KEY,
+      Authorization: `Bearer ${SUPA_KEY}`,
+    };
+    if (_currentUserId) {
+      // Passes user_id to Supabase so RLS policies can use current_user_id()
+      h['x-set-config-app-user-id'] = _currentUserId;
+    }
+    return h;
   },
 
   async findUser(username) {
@@ -1723,6 +1770,9 @@ function LoginScreen() {
         _pendingRestore: false,
       });
       // Music stays muted until user taps 🔇 button
+      _currentUserId = user.id; // enable RLS
+      identifyUser(user.id, user.username);
+      track('login', { username: user.username });
     } catch (e) {
       setErr('Error de conexión. Comprueba tu internet.');
     }
@@ -2608,6 +2658,7 @@ export default function NutriPet() {
   const [showScanner, setShowScanner] = useState(false);
   const [pending, setPending] = useState(null);
   const [notif, setNotif] = useState(null);
+  const [blockedProduct, setBlockedProduct] = useState<{name:string, minutes:number} | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [foodLog, setFoodLog] = useState([]);
   const [unlockedAch, setUnlockedAch] = useState<string[]>([]);
@@ -2786,7 +2837,7 @@ export default function NutriPet() {
       }
 
       const ach = ACHIEVEMENTS.find(a => a.id === id);
-      if (ach) { playSfx('achievement'); setNewAch(ach); break; } // mostrar uno a la vez
+      if (ach) { playSfx('achievement'); setNewAch(ach); track('achievement_unlocked', {{ achievement: ach.id, label: ach.label }}); break; } // mostrar uno a la vez
     }
   }
 
@@ -2839,7 +2890,11 @@ export default function NutriPet() {
     const timesInWindow = recentScans.current.filter(s => s.barcode === barcode).length;
     if (timesInWindow >= 2) {
       playSfx('blocked');
-      showN(`🚫 ¡Ya le diste ${product.name} dos veces! Espera un poco antes de repetir.`);
+      // Calculate remaining wait time
+      const oldest = recentScans.current.filter(s => s.barcode === barcode)[0];
+      const remainingMs = WINDOW - (now - oldest.time);
+      const remainingMin = Math.max(1, Math.ceil(remainingMs / 60000));
+      setBlockedProduct({ name: product.name, minutes: remainingMin });
       return;
     }
     recentScans.current.push({ barcode, time: now });
@@ -2848,6 +2903,12 @@ export default function NutriPet() {
     const _sc = (product.score || '').toLowerCase();
     if (['a','b'].includes(_sc)) playSfx('feed_good');
     else playSfx('feed_bad');
+    track('feed', {{
+      product_name: product.name,
+      brand: product.brand,
+      score: product.score,
+      barcode: product.barcode,
+    }});
     petStore.setState((s) => {
       const next = {
         health: Math.max(0, Math.min(100, s.health + cfg.healthDelta)),
@@ -2905,6 +2966,8 @@ export default function NutriPet() {
       }).catch(() => {});
     }
     // Clear session but NOT nutripet_state — it has userId so it's safe
+    track('logout');
+    _currentUserId = null; // clear RLS user
     stopBgMusic();
     localStorage.removeItem('nutripet_session');
     petStore.setState({
@@ -3234,7 +3297,9 @@ export default function NutriPet() {
           </div>
           <button
             onClick={() => {
-              playSfx(petStore.getState().sleeping ? 'wake' : 'sleep');
+              const isSleeping = petStore.getState().sleeping;
+              playSfx(isSleeping ? 'wake' : 'sleep');
+              track(isSleeping ? 'pet_wake' : 'pet_sleep');
               petStore.setState((s) => ({ sleeping: !s.sleeping }));
             }}
             style={{
@@ -3304,7 +3369,7 @@ export default function NutriPet() {
       {/* FAB */}
       {!pet.sleeping && (
         <button
-          onClick={() => setShowScanner(true)}
+          onClick={() => { setShowScanner(true); track('scanner_opened'); }}
           style={{
             position: 'fixed',
             bottom: 24,
@@ -3345,6 +3410,48 @@ export default function NutriPet() {
         />
       )}
       {newAch && <AchievementToast achievement={newAch} onDone={() => setNewAch(null)} />}
+
+      {/* Blocked food modal */}
+      {blockedProduct && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 300,
+          background: 'rgba(0,0,0,0.5)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: 24,
+          animation: 'fadeIn 0.2s ease',
+        }} onClick={() => setBlockedProduct(null)}>
+          <div style={{
+            background: 'white', borderRadius: 28, padding: '32px 28px',
+            maxWidth: 320, width: '100%', textAlign: 'center',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+            animation: 'achievementPop 0.4s cubic-bezier(.34,1.56,.64,1)',
+          }} onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 56, marginBottom: 12 }}>🚫</div>
+            <h3 style={{ fontSize: 20, fontWeight: 900, color: '#333', marginBottom: 10 }}>
+              ¡Demasiado de lo mismo!
+            </h3>
+            <p style={{ fontSize: 15, color: '#666', lineHeight: 1.6, marginBottom: 8 }}>
+              Ya le diste <strong>{blockedProduct.name}</strong> dos veces seguidas.
+            </p>
+            <p style={{ fontSize: 14, color: '#999', lineHeight: 1.6, marginBottom: 24 }}>
+              Espera <strong style={{ color: '#FF6B9D' }}>~{blockedProduct.minutes} min</strong> o prueba con otro alimento. ¡La variedad es importante para una dieta sana! 🥗
+            </p>
+            <button
+              onClick={() => setBlockedProduct(null)}
+              style={{
+                background: 'linear-gradient(135deg,#FF6B9D,#ff8fab)',
+                color: 'white', border: 'none',
+                padding: '14px 32px', borderRadius: 50,
+                fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                boxShadow: '0 4px 16px rgba(255,107,157,0.4)',
+                width: '100%',
+              }}
+            >
+              ¡Entendido! 👍
+            </button>
+          </div>
+        </div>
+      )}
       {showAchievements && <AchievementsScreen unlocked={unlockedAch} onClose={() => setShowAchievements(false)} dark={dark} />}
       {showAccessories && <AccessoriesScreen unlocked={unlockedAcc} equipped={equippedAcc} onEquip={handleEquipAccessory} onClose={() => setShowAccessories(false)} dark={dark} />}
       {showStatsScreen && <StatsScreen userId={pet.userId} username={pet.username} totalFeedings={pet.totalFeedings} goodFeedings={pet.goodFeedings} onClose={() => setShowStatsScreen(false)} dark={dark} />}
