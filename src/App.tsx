@@ -2890,7 +2890,8 @@ export default function NutriPet() {
     const timesInWindow = recentScans.current.filter(s => s.barcode === barcode).length;
     if (timesInWindow >= 2) {
       playSfx('blocked');
-      // Calculate remaining wait time
+      // Close ProductResult first, then show blocked modal on top
+      setPending(null);
       const oldest = recentScans.current.filter(s => s.barcode === barcode)[0];
       const remainingMs = WINDOW - (now - oldest.time);
       const remainingMin = Math.max(1, Math.ceil(remainingMs / 60000));
@@ -3414,12 +3415,12 @@ export default function NutriPet() {
       {/* Blocked food modal */}
       {blockedProduct && (
         <div style={{
-          position: 'fixed', inset: 0, zIndex: 300,
+          position: 'fixed', inset: 0, zIndex: 9999,
           background: 'rgba(0,0,0,0.5)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           padding: 24,
           animation: 'fadeIn 0.2s ease',
-        }} onClick={() => setBlockedProduct(null)}>
+        }} onClick={() => { setBlockedProduct(null); setPending(null); }}>
           <div style={{
             background: 'white', borderRadius: 28, padding: '32px 28px',
             maxWidth: 320, width: '100%', textAlign: 'center',
@@ -3437,7 +3438,7 @@ export default function NutriPet() {
               Espera <strong style={{ color: '#FF6B9D' }}>~{blockedProduct.minutes} min</strong> o prueba con otro alimento. ¡La variedad es importante para una dieta sana! 🥗
             </p>
             <button
-              onClick={() => setBlockedProduct(null)}
+              onClick={() => { setBlockedProduct(null); setPending(null); }}
               style={{
                 background: 'linear-gradient(135deg,#FF6B9D,#ff8fab)',
                 color: 'white', border: 'none',
