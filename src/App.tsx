@@ -2837,7 +2837,7 @@ export default function NutriPet() {
       }
 
       const ach = ACHIEVEMENTS.find(a => a.id === id);
-      if (ach) { playSfx('achievement'); setNewAch(ach); track('achievement_unlocked', {{ achievement: ach.id, label: ach.label }}); break; } // mostrar uno a la vez
+      if (ach) { playSfx('achievement'); setNewAch(ach); track('achievement_unlocked', { achievement: ach.id, label: ach.label }); break; } // mostrar uno a la vez
     }
   }
 
@@ -2904,12 +2904,12 @@ export default function NutriPet() {
     const _sc = (product.score || '').toLowerCase();
     if (['a','b'].includes(_sc)) playSfx('feed_good');
     else playSfx('feed_bad');
-    track('feed', {{
+    track('feed', {
       product_name: product.name,
       brand: product.brand,
       score: product.score,
       barcode: product.barcode,
-    }});
+    });
     petStore.setState((s) => {
       const next = {
         health: Math.max(0, Math.min(100, s.health + cfg.healthDelta)),
