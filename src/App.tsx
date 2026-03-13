@@ -351,6 +351,7 @@ const petStore = createStore({
   health: 85,
   hunger: 70,
   energy: 80,
+  weight: 50,  // 0=skinny 50=normal 100=chubby
   sleeping: false,
   mood: 'happy',
   lastFood: null,
@@ -383,16 +384,19 @@ setInterval(() => {
     const h = Math.max(0, s.health - 0.025);
     const u = Math.max(0, s.hunger - 0.05);
     const e = Math.max(0, s.energy - 0.03);
+    // Weight decays very slowly over time (natural metabolism)
+    const w = Math.max(0, (s.weight ?? 50) - 0.004);
     let mood = 'happy';
     if (h < 20) mood = 'sick';
     else if (e < 25 || u < 20) mood = 'tired';
-    next = { health: h, hunger: u, energy: e, mood };
+    next = { health: h, hunger: u, energy: e, weight: w, mood };
   }
   const merged = { ...s, ...next };
   try {
     localStorage.setItem('nutripet_state', JSON.stringify({
       userId: merged.userId,
       health: merged.health, hunger: merged.hunger, energy: merged.energy,
+      weight: merged.weight ?? 50,
       sleeping: merged.sleeping, mood: merged.mood, lastFood: merged.lastFood,
       totalFeedings: merged.totalFeedings, goodFeedings: merged.goodFeedings,
       savedAt: Date.now(),
@@ -472,11 +476,22 @@ const NC = {
 const getNC = (s) => NC[(s || '').toLowerCase()] || NC.unknown;
 
 // ─── PET FACE ─────────────────────────────────────────────────────────────────
-function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:string, sleeping:boolean, health:number, feedAnim:boolean, equipped?:string[] }) {
+function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50 }: { mood:string, sleeping:boolean, health:number, feedAnim:boolean, equipped?:string[], weight?:number }) {
   const sick = mood === 'sick' || health < 20;
   const tired = mood === 'tired' || health < 40;
+  const chubby = weight > 65;
+  const skinny = weight < 30;
   const body = sick ? '#c0c0c0' : health > 60 ? '#FFB3C6' : '#f0c0a0';
   const cheek = sick ? '#b0b0b0' : '#ff8fab';
+  // Body scale: chubby cats are wider/rounder, skinny cats are a bit smaller
+  const bodyRx = chubby ? 68 : skinny ? 48 : 55;
+  const bodyRy = chubby ? 58 : skinny ? 44 : 50;
+  const headRx = chubby ? 52 : skinny ? 40 : 45;
+  const headRy = chubby ? 48 : skinny ? 38 : 42;
+  const bellyRx = chubby ? 42 : skinny ? 24 : 32;
+  const bellyRy = chubby ? 34 : skinny ? 20 : 26;
+  const cheekRx = chubby ? 14 : 10;
+  const cheekRy = chubby ? 10 : 7;
   const [tapAnim, setTapAnim] = useState(false);
   const [tapEmoji, setTapEmoji] = useState('💕');
   const [hearts, setHearts] = useState<{id:number, emoji:string, x:number}[]>([]);
@@ -541,9 +556,9 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
         <ellipse cx="120" cy="38" rx="18" ry="22" fill={body} />
         <ellipse cx="40" cy="38" rx="10" ry="14" fill="#ffccd5" />
         <ellipse cx="120" cy="38" rx="10" ry="14" fill="#ffccd5" />
-        <ellipse cx="80" cy="100" rx="55" ry="50" fill={body} />
-        <ellipse cx="80" cy="108" rx="32" ry="26" fill="#ffe4ec" />
-        <ellipse cx="80" cy="75" rx="45" ry="42" fill={body} />
+        <ellipse cx="80" cy="100" rx={bodyRx} ry={bodyRy} fill={body} />
+        <ellipse cx="80" cy="108" rx={bellyRx} ry={bellyRy} fill="#ffe4ec" />
+        <ellipse cx="80" cy="75" rx={headRx} ry={headRy} fill={body} />
         {sleeping ? (
           <>
             <path
@@ -606,16 +621,16 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
             <ellipse
               cx="50"
               cy="84"
-              rx="10"
-              ry="7"
+              rx={cheekRx}
+              ry={cheekRy}
               fill={cheek}
               opacity="0.5"
             />
             <ellipse
               cx="110"
               cy="84"
-              rx="10"
-              ry="7"
+              rx={cheekRx}
+              ry={cheekRy}
               fill={cheek}
               opacity="0.5"
             />
@@ -815,7 +830,7 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [] }: { mood:str
 }
 
 // ─── STAT BAR ─────────────────────────────────────────────────────────────────
-function StatBar({ label, value, icon, color }) {
+function StatBar({ label, value, icon, color, invertColor = false }: { label:string, value:number, icon:string, color:string, invertColor?:boolean }) {
   const pct = Math.round(Math.max(0, Math.min(100, value)));
   const isLow = pct < 25;
   const isMid = pct >= 25 && pct < 50;
@@ -1766,6 +1781,7 @@ function LoginScreen() {
       petStore.setState({
         loggedIn: true, userId: user.id, username: user.username, emoji: user.emoji,
         health: fH, hunger: fU, energy: fE, sleeping: fSleep,
+        weight: ls?.weight ?? 50,
         mood: fMood, lastFood: fFood, totalFeedings: fTotal, goodFeedings: fGood,
         _pendingRestore: false,
       });
@@ -2911,16 +2927,21 @@ export default function NutriPet() {
       barcode: product.barcode,
     });
     petStore.setState((s) => {
+      const sc = (product.score || '').toLowerCase();
+      // Weight: bad food adds weight, good food reduces it faster
+      const weightDelta = sc === 'e' ? +4 : sc === 'd' ? +2.5 : sc === 'c' ? +0.5 : sc === 'b' ? -1 : -2;
+      const newWeight = Math.max(0, Math.min(100, (s.weight ?? 50) + weightDelta));
       const next = {
         health: Math.max(0, Math.min(100, s.health + cfg.healthDelta)),
         hunger: Math.min(100, s.hunger + cfg.hungerDelta),
         energy: Math.max(0, Math.min(100, s.energy + cfg.energyDelta)),
+        weight: newWeight,
         feedAnim: true,
         lastFood: product,
         totalFeedings: s.totalFeedings + 1,
         goodFeedings:
           s.goodFeedings +
-          (['a', 'b'].includes((product.score || '').toLowerCase()) ? 1 : 0),
+          (['a', 'b'].includes(sc) ? 1 : 0),
         mood: cfg.healthDelta < 0 ? 'sick' : 'happy',
       };
       scheduleSave({ ...s, ...next });
@@ -2928,6 +2949,10 @@ export default function NutriPet() {
     });
     setTimeout(() => petStore.setState({ feedAnim: false }), 800);
     showN(cfg.msg);
+    // Show weight change message if significant
+    const curWeight = petStore.getState().weight ?? 50;
+    if (curWeight > 75) setTimeout(() => showN('🐷 ¡Uf, me noto un poco pesadito! Prueba con algo más sano...'), 2000);
+    else if (curWeight < 25) setTimeout(() => showN('💪 ¡Me siento ligero y ágil! ¡Sigue así!'), 2000);
     setPending(null);
     // Save food log to Supabase
     try {
@@ -2973,7 +2998,7 @@ export default function NutriPet() {
     localStorage.removeItem('nutripet_session');
     petStore.setState({
       loggedIn: false, userId: null, username: '', emoji: '🐱',
-      health: 85, hunger: 70, energy: 80, sleeping: false,
+      health: 85, hunger: 70, energy: 80, weight: 50, sleeping: false,
       mood: 'happy', lastFood: null, feedAnim: false, totalFeedings: 0, goodFeedings: 0,
       _pendingRestore: false,
     });
@@ -3212,7 +3237,7 @@ export default function NutriPet() {
               marginBottom: 20,
             }}
           >
-            <PetFace mood={pet.mood} sleeping={pet.sleeping} health={pet.health} feedAnim={pet.feedAnim} equipped={equippedAcc}/>
+            <PetFace mood={pet.mood} sleeping={pet.sleeping} health={pet.health} feedAnim={pet.feedAnim} weight={pet.weight ?? 50} equipped={equippedAcc}/>
           </div>
           <div style={{ textAlign: 'center', marginBottom: 20 }}>
             <span
@@ -3248,6 +3273,7 @@ export default function NutriPet() {
             </span>
           </div>
           <StatBar label="Salud" value={pet.health} icon="💖" color="#FF6B9D" />
+          <StatBar label="Peso" value={pet.weight ?? 50} icon={((pet.weight ?? 50) > 65) ? '🐷' : ((pet.weight ?? 50) < 30) ? '🏃' : '⚖️'} color={(pet.weight ?? 50) > 75 ? '#FF9F43' : (pet.weight ?? 50) > 65 ? '#fecb02' : '#6BCB77'} invertColor />
           <StatBar
             label="Hambre"
             value={pet.hunger}
