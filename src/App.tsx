@@ -403,8 +403,9 @@ setInterval(() => {
     else if (e < 25 || u < 20) mood = 'tired';
     // Auto-stop training if too hungry or too tired
     const shouldStopTraining = s.training && (u < 10 || e < 10);
+    // Always carry training flag forward so setState spread doesn't lose it
     next = { health: h, hunger: u, energy: e, weight: w, strength: st, mood,
-      ...(shouldStopTraining ? { training: false } : {}) };
+      training: shouldStopTraining ? false : (s.training ?? false) };
   }
   const merged = { ...s, ...next };
   try {
