@@ -372,11 +372,13 @@ function usePetStore() {
 
 // ─── GLOBAL DECAY (runs outside React, never recreated) ───────────────────────
 let _saveTimer: any = null;
+let _isTraining = false; // module-level flag, never lost between renders
 setInterval(() => {
   const s = petStore.getState();
   if (!s.loggedIn || !s.userId) return;
   let next: any;
   if (s.sleeping) {
+    _isTraining = false; // can't train while sleeping
     next = {
       energy: Math.min(100, s.energy + 0.3),
       health: Math.min(100, s.health + 0.04),
@@ -384,7 +386,7 @@ setInterval(() => {
     };
   } else {
     let h, u, e, w, st;
-    if (s.training) {
+    if (_isTraining) {
       // Training mode: burns hunger+energy fast, builds strength, reduces weight
       h = Math.max(0, s.health - 0.01);
       u = Math.max(0, s.hunger - 0.12);   // hungry faster
@@ -402,10 +404,10 @@ setInterval(() => {
     if (h < 20) mood = 'sick';
     else if (e < 25 || u < 20) mood = 'tired';
     // Auto-stop training if too hungry or too tired
-    const shouldStopTraining = s.training && (u < 10 || e < 10);
-    // Always carry training flag forward so setState spread doesn't lose it
+    const shouldStopTraining = _isTraining && (u < 10 || e < 10);
+    if (shouldStopTraining) _isTraining = false;
     next = { health: h, hunger: u, energy: e, weight: w, strength: st, mood,
-      training: shouldStopTraining ? false : (s.training ?? false) };
+      training: _isTraining };
   }
   const merged = { ...s, ...next };
   try {
@@ -1837,10 +1839,11 @@ function LoginScreen() {
         health: fH, hunger: fU, energy: fE, sleeping: fSleep,
         weight: ls?.weight ?? 50,
         strength: ls?.strength ?? 0,
-        training: false, // always start not training
+        training: false, // always start not training — also reset module flag
         mood: fMood, lastFood: fFood, totalFeedings: fTotal, goodFeedings: fGood,
         _pendingRestore: false,
       });
+      _isTraining = false; // reset training on login
       // Music stays muted until user taps 🔇 button
       _currentUserId = user.id; // enable RLS
       identifyUser(user.id, user.username);
@@ -3064,6 +3067,7 @@ export default function NutriPet() {
     // Clear session but NOT nutripet_state — it has userId so it's safe
     track('logout');
     _currentUserId = null; // clear RLS user
+    _isTraining = false;
     stopBgMusic();
     localStorage.removeItem('nutripet_session');
     petStore.setState({
@@ -3456,17 +3460,17 @@ export default function NutriPet() {
           </div>
           <button
             onClick={() => {
-              const isTraining = petStore.getState().training;
-              if (!isTraining && (pet.hunger < 20 || pet.energy < 20)) {
+              if (!_isTraining && (pet.hunger < 20 || pet.energy < 20)) {
                 showN('😓 ¡Necesito comer y descansar antes de entrenar!');
                 return;
               }
-              if (!isTraining && pet.sleeping) {
-                petStore.setState((s) => ({ sleeping: false }));
+              if (!_isTraining && pet.sleeping) {
+                petStore.setState({ sleeping: false });
               }
-              playSfx(isTraining ? 'wake' : 'feed_good');
-              track(isTraining ? 'pet_stop_training' : 'pet_start_training');
-              petStore.setState((s) => ({ training: !s.training }));
+              _isTraining = !_isTraining;
+              playSfx(_isTraining ? 'feed_good' : 'wake');
+              track(_isTraining ? 'pet_start_training' : 'pet_stop_training');
+              petStore.setState({ training: _isTraining });
             }}
             style={{
               width: 56, height: 30, borderRadius: 99,
@@ -3531,7 +3535,7 @@ export default function NutriPet() {
       {!pet.sleeping && (
         <button
           onClick={() => {
-            if (pet.training) { showN('🏋️ ¡Estoy entrenando! Para primero para poder comer.'); return; }
+            if (_isTraining) { showN('🏋️ ¡Estoy entrenando! Para primero para poder comer.'); return; }
             setShowScanner(true); track('scanner_opened');
           }}
           style={{
