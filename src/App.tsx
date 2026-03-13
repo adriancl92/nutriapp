@@ -352,6 +352,8 @@ const petStore = createStore({
   hunger: 70,
   energy: 80,
   weight: 50,  // 0=skinny 50=normal 100=chubby
+  strength: 0, // 0=normal 100=super muscular — grows with protein (score A/B)
+  training: false, // training mode — builds strength, burns hunger+energy
   sleeping: false,
   mood: 'happy',
   lastFood: null,
@@ -381,15 +383,28 @@ setInterval(() => {
       hunger: Math.max(0, s.hunger - 0.02),
     };
   } else {
-    const h = Math.max(0, s.health - 0.025);
-    const u = Math.max(0, s.hunger - 0.05);
-    const e = Math.max(0, s.energy - 0.03);
-    // Weight decays very slowly over time (natural metabolism)
-    const w = Math.max(0, (s.weight ?? 50) - 0.004);
+    let h, u, e, w, st;
+    if (s.training) {
+      // Training mode: burns hunger+energy fast, builds strength, reduces weight
+      h = Math.max(0, s.health - 0.01);
+      u = Math.max(0, s.hunger - 0.12);   // hungry faster
+      e = Math.max(0, s.energy - 0.09);   // tired faster
+      w = Math.max(0, (s.weight ?? 50) - 0.015); // loses weight
+      st = Math.min(100, (s.strength ?? 0) + 0.02); // gains strength
+    } else {
+      h = Math.max(0, s.health - 0.025);
+      u = Math.max(0, s.hunger - 0.05);
+      e = Math.max(0, s.energy - 0.03);
+      w = Math.max(0, (s.weight ?? 50) - 0.004);
+      st = Math.max(0, (s.strength ?? 0) - 0.003);
+    }
     let mood = 'happy';
     if (h < 20) mood = 'sick';
     else if (e < 25 || u < 20) mood = 'tired';
-    next = { health: h, hunger: u, energy: e, weight: w, mood };
+    // Auto-stop training if too hungry or too tired
+    const shouldStopTraining = s.training && (u < 10 || e < 10);
+    next = { health: h, hunger: u, energy: e, weight: w, strength: st, mood,
+      ...(shouldStopTraining ? { training: false } : {}) };
   }
   const merged = { ...s, ...next };
   try {
@@ -397,6 +412,8 @@ setInterval(() => {
       userId: merged.userId,
       health: merged.health, hunger: merged.hunger, energy: merged.energy,
       weight: merged.weight ?? 50,
+      strength: merged.strength ?? 0,
+      training: merged.training ?? false,
       sleeping: merged.sleeping, mood: merged.mood, lastFood: merged.lastFood,
       totalFeedings: merged.totalFeedings, goodFeedings: merged.goodFeedings,
       savedAt: Date.now(),
@@ -476,14 +493,17 @@ const NC = {
 const getNC = (s) => NC[(s || '').toLowerCase()] || NC.unknown;
 
 // ─── PET FACE ─────────────────────────────────────────────────────────────────
-function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50 }: { mood:string, sleeping:boolean, health:number, feedAnim:boolean, equipped?:string[], weight?:number }) {
+function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50, strength = 0, training = false }: { mood:string, sleeping:boolean, health:number, feedAnim:boolean, equipped?:string[], weight?:number, strength?:number, training?:boolean }) {
   const sick = mood === 'sick' || health < 20;
   const tired = mood === 'tired' || health < 40;
   const chubby = weight > 65;
   const skinny = weight < 30;
+  // Muscle levels: 0=none, 1=small, 2=medium, 3=big
+  const muscleLevel = strength > 70 ? 3 : strength > 40 ? 2 : strength > 15 ? 1 : 0;
+  const hasMuscles = muscleLevel > 0;
   const body = sick ? '#c0c0c0' : health > 60 ? '#FFB3C6' : '#f0c0a0';
   const cheek = sick ? '#b0b0b0' : '#ff8fab';
-  // Body scale: chubby cats are wider/rounder, skinny cats are a bit smaller
+  // Body scale
   const bodyRx = chubby ? 68 : skinny ? 48 : 55;
   const bodyRy = chubby ? 58 : skinny ? 44 : 50;
   const headRx = chubby ? 52 : skinny ? 40 : 45;
@@ -492,6 +512,10 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50 
   const bellyRy = chubby ? 34 : skinny ? 20 : 26;
   const cheekRx = chubby ? 14 : 10;
   const cheekRy = chubby ? 10 : 7;
+  // Arm sizes grow with muscle level
+  const armW = [0, 10, 14, 18][muscleLevel];
+  const bicepR = [0, 10, 14, 18][muscleLevel];
+  const forearmW = [0, 7, 10, 13][muscleLevel];
   const [tapAnim, setTapAnim] = useState(false);
   const [tapEmoji, setTapEmoji] = useState('💕');
   const [hearts, setHearts] = useState<{id:number, emoji:string, x:number}[]>([]);
@@ -552,6 +576,28 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50 
             : 'float 3s ease-in-out infinite',
         }}
       >
+        {/* ── MUSCLE ARMS (behind body) ── */}
+        {hasMuscles && (
+          <>
+            {/* Left arm — upper arm + bicep + fist */}
+            <rect x={80 - bodyRx - armW * 1.8} y="88" width={armW} height={armW * 2.2} rx={armW / 2} fill={body} />
+            <ellipse cx={80 - bodyRx - armW * 1.3} cy="86" rx={bicepR} ry={bicepR * 0.85} fill={body} />
+            <rect x={80 - bodyRx - armW * 1.8} y={88 + armW * 2} width={forearmW} height={armW * 1.6} rx={forearmW / 2} fill={body} />
+            {/* Left fist — round paw */}
+            <ellipse cx={80 - bodyRx - armW * 1.4} cy={88 + armW * 3.8} rx={forearmW * 0.9} ry={forearmW * 0.75} fill={body} />
+            {/* Right arm — mirrored */}
+            <rect x={80 + bodyRx + armW * 0.8} y="88" width={armW} height={armW * 2.2} rx={armW / 2} fill={body} />
+            <ellipse cx={80 + bodyRx + armW * 1.3} cy="86" rx={bicepR} ry={bicepR * 0.85} fill={body} />
+            <rect x={80 + bodyRx + armW * 0.8} y={88 + armW * 2} width={forearmW} height={armW * 1.6} rx={forearmW / 2} fill={body} />
+            {/* Right fist */}
+            <ellipse cx={80 + bodyRx + armW * 1.4} cy={88 + armW * 3.8} rx={forearmW * 0.9} ry={forearmW * 0.75} fill={body} />
+            {/* Muscle line on bicep — cute detail */}
+            {muscleLevel >= 2 && <>
+              <path d={`M${80 - bodyRx - armW * 1.7} 90 Q${80 - bodyRx - armW * 0.9} 84 ${80 - bodyRx - armW * 0.2} 90`} stroke="#e8759a" strokeWidth="1.5" fill="none" strokeLinecap="round" opacity="0.6"/>
+              <path d={`M${80 + bodyRx + armW * 0.3} 90 Q${80 + bodyRx + armW * 1.1} 84 ${80 + bodyRx + armW * 1.8} 90`} stroke="#e8759a" strokeWidth="1.5" fill="none" strokeLinecap="round" opacity="0.6"/>
+            </>}
+          </>
+        )}
         <ellipse cx="40" cy="38" rx="18" ry="22" fill={body} />
         <ellipse cx="120" cy="38" rx="18" ry="22" fill={body} />
         <ellipse cx="40" cy="38" rx="10" ry="14" fill="#ffccd5" />
@@ -674,6 +720,13 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50 
             animation: sleeping ? 'none' : 'wag 1.5s ease-in-out infinite',
           }}
         />
+        {/* Sweat drops when training */}
+        {training && <>
+          <ellipse cx="22" cy="55" rx="4" ry="6" fill="#7ed4f7" opacity="0.8"/>
+          <ellipse cx="18" cy="70" rx="3" ry="4.5" fill="#7ed4f7" opacity="0.6"/>
+          <ellipse cx="138" cy="50" rx="3.5" ry="5.5" fill="#7ed4f7" opacity="0.7"/>
+          <ellipse cx="142" cy="65" rx="2.5" ry="4" fill="#7ed4f7" opacity="0.5"/>
+        </>}
         {/* ── SVG ACCESSORIES ── */}
         {equipped.includes('hat_star') && <>
           <ellipse cx="80" cy="32" rx="28" ry="8" fill="#4a90d9" opacity="0.9"/>
@@ -1782,6 +1835,8 @@ function LoginScreen() {
         loggedIn: true, userId: user.id, username: user.username, emoji: user.emoji,
         health: fH, hunger: fU, energy: fE, sleeping: fSleep,
         weight: ls?.weight ?? 50,
+        strength: ls?.strength ?? 0,
+        training: false, // always start not training
         mood: fMood, lastFood: fFood, totalFeedings: fTotal, goodFeedings: fGood,
         _pendingRestore: false,
       });
@@ -2931,11 +2986,22 @@ export default function NutriPet() {
       // Weight: bad food adds weight, good food reduces it faster
       const weightDelta = sc === 'e' ? +4 : sc === 'd' ? +2.5 : sc === 'c' ? +0.5 : sc === 'b' ? -1 : -2;
       const newWeight = Math.max(0, Math.min(100, (s.weight ?? 50) + weightDelta));
+      // Strength: grows with protein-rich foods (score A/B) — detect by name keywords or category
+      const productNameLower = (product.name || '').toLowerCase();
+      const isProtein = sc === 'a' || sc === 'b'
+        ? ['pollo','pechuga','atún','salmón','huevo','lentejas','garbanzo','judía',
+           'tofu','yogur','queso','leche','proteína','protein','chicken','tuna',
+           'salmon','egg','lentil','bean','yogurt','cheese','milk','whey',
+           'almendra','nuez','cacahuete','almond','nut','peanut'].some(k => productNameLower.includes(k))
+        : false;
+      const strengthDelta = isProtein ? (sc === 'a' ? +8 : +5) : sc === 'a' ? +1 : sc === 'b' ? +0.5 : 0;
+      const newStrength = Math.max(0, Math.min(100, (s.strength ?? 0) + strengthDelta));
       const next = {
         health: Math.max(0, Math.min(100, s.health + cfg.healthDelta)),
         hunger: Math.min(100, s.hunger + cfg.hungerDelta),
         energy: Math.max(0, Math.min(100, s.energy + cfg.energyDelta)),
         weight: newWeight,
+        strength: newStrength,
         feedAnim: true,
         lastFood: product,
         totalFeedings: s.totalFeedings + 1,
@@ -2951,8 +3017,11 @@ export default function NutriPet() {
     showN(cfg.msg);
     // Show weight change message if significant
     const curWeight = petStore.getState().weight ?? 50;
+    const curStrength = petStore.getState().strength ?? 0;
     if (curWeight > 75) setTimeout(() => showN('🐷 ¡Uf, me noto un poco pesadito! Prueba con algo más sano...'), 2000);
     else if (curWeight < 25) setTimeout(() => showN('💪 ¡Me siento ligero y ágil! ¡Sigue así!'), 2000);
+    if (curStrength > 70) setTimeout(() => showN('💪 ¡Me siento fortísimo! ¡Mira estos músculos!'), 2500);
+    else if (curStrength > 40 && strengthDelta > 0) setTimeout(() => showN('🏋️ ¡La proteína me hace más fuerte!'), 2500);
     setPending(null);
     // Save food log to Supabase
     try {
@@ -2998,7 +3067,7 @@ export default function NutriPet() {
     localStorage.removeItem('nutripet_session');
     petStore.setState({
       loggedIn: false, userId: null, username: '', emoji: '🐱',
-      health: 85, hunger: 70, energy: 80, weight: 50, sleeping: false,
+      health: 85, hunger: 70, energy: 80, weight: 50, strength: 0, sleeping: false, training: false,
       mood: 'happy', lastFood: null, feedAnim: false, totalFeedings: 0, goodFeedings: 0,
       _pendingRestore: false,
     });
@@ -3237,7 +3306,7 @@ export default function NutriPet() {
               marginBottom: 20,
             }}
           >
-            <PetFace mood={pet.mood} sleeping={pet.sleeping} health={pet.health} feedAnim={pet.feedAnim} weight={pet.weight ?? 50} equipped={equippedAcc}/>
+            <PetFace mood={pet.mood} sleeping={pet.sleeping} health={pet.health} feedAnim={pet.feedAnim} weight={pet.weight ?? 50} strength={pet.strength ?? 0} training={pet.training ?? false} equipped={equippedAcc}/>
           </div>
           <div style={{ textAlign: 'center', marginBottom: 20 }}>
             <span
@@ -3356,6 +3425,70 @@ export default function NutriPet() {
           </button>
         </div>
 
+        {/* Training card */}
+        <div
+          style={{
+            background: pet.training
+              ? (dark ? 'rgba(255,165,0,0.15)' : 'rgba(255,165,0,0.08)')
+              : cardBg,
+            backdropFilter: 'blur(20px)',
+            borderRadius: 20,
+            padding: '14px 18px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginBottom: 12,
+            border: pet.training ? '1.5px solid rgba(255,165,0,0.4)' : '1.5px solid transparent',
+            transition: 'all 0.3s',
+          }}
+        >
+          <div>
+            <p style={{ margin: 0, fontWeight: 800, fontSize: 15,
+              color: pet.training ? '#e07b00' : (dark ? '#e0a060' : '#444') }}>
+              {pet.training ? '🏋️ Entrenando...' : '🏋️ Modo Entrenamiento'}
+            </p>
+            <p style={{ margin: 0, fontSize: 12, color: dark ? '#8a6a3a' : '#999' }}>
+              {pet.training
+                ? `Fuerza: ${Math.round(pet.strength ?? 0)}% · ¡Quema calorías!`
+                : 'Gana fuerza y pierde peso'}
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              const isTraining = petStore.getState().training;
+              if (!isTraining && (pet.hunger < 20 || pet.energy < 20)) {
+                showN('😓 ¡Necesito comer y descansar antes de entrenar!');
+                return;
+              }
+              if (!isTraining && pet.sleeping) {
+                petStore.setState((s) => ({ sleeping: false }));
+              }
+              playSfx(isTraining ? 'wake' : 'feed_good');
+              track(isTraining ? 'pet_stop_training' : 'pet_start_training');
+              petStore.setState((s) => ({ training: !s.training }));
+            }}
+            style={{
+              width: 56, height: 30, borderRadius: 99,
+              background: pet.training ? '#e07b00' : (dark ? '#555' : '#ddd'),
+              border: 'none', cursor: 'pointer',
+              position: 'relative', transition: 'background 0.3s',
+            }}
+          >
+            <div style={{
+              position: 'absolute', top: 3,
+              left: pet.training ? 'calc(100% - 27px)' : 3,
+              width: 24, height: 24, borderRadius: '50%',
+              background: 'white',
+              transition: 'left 0.3s cubic-bezier(.34,1.56,.64,1)',
+              boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 12,
+            }}>
+              🏋️
+            </div>
+          </button>
+        </div>
+
         {/* Last food */}
         {pet.lastFood && (
           <div
@@ -3396,7 +3529,10 @@ export default function NutriPet() {
       {/* FAB */}
       {!pet.sleeping && (
         <button
-          onClick={() => { setShowScanner(true); track('scanner_opened'); }}
+          onClick={() => {
+            if (pet.training) { showN('🏋️ ¡Estoy entrenando! Para primero para poder comer.'); return; }
+            setShowScanner(true); track('scanner_opened');
+          }}
           style={{
             position: 'fixed',
             bottom: 24,
