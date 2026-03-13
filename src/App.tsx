@@ -41,6 +41,9 @@ let _audioCtx: AudioContext | null = null;
 let _bgGain: GainNode | null = null;
 let _bgPlaying = false;
 let _musicMuted = true; // starts muted — user must activate
+let _trainingMusicPlaying = false;
+let _trainingGain: GainNode | null = null;
+let _trainingScheduled = false;
 
 function getAudioCtx(): AudioContext {
   if (!_audioCtx) {
@@ -98,10 +101,101 @@ function stopBgMusic() {
   } catch {}
 }
 
+// ── TRAINING MUSIC — upbeat workout loop ──────────────────────────────────────
+function startTrainingMusic() {
+  if (_trainingMusicPlaying || _musicMuted) return;
+  try {
+    const ctx = getAudioCtx();
+    _trainingGain = ctx.createGain();
+    _trainingGain.gain.setValueAtTime(0, ctx.currentTime);
+    _trainingGain.gain.linearRampToValueAtTime(0.09, ctx.currentTime + 0.6);
+    _trainingGain.connect(ctx.destination);
+
+    // Upbeat workout melody — faster tempo, energetic, major key
+    // Notes: C D E G A pattern with driving rhythm feel
+    const melody = [
+      // Bar 1 — punchy ascending
+      [523,0.15],[659,0.15],[784,0.15],[1047,0.25],
+      // Bar 2 — syncopated feel
+      [880,0.15],[784,0.10],[880,0.10],[1047,0.25],
+      // Bar 3 — drive down and up
+      [784,0.15],[659,0.15],[523,0.15],[659,0.30],
+      // Bar 4 — power finish
+      [784,0.15],[880,0.15],[1047,0.15],[1047,0.25],
+    ];
+
+    // Bass kick pattern underneath
+    const bass = [
+      [130,0.12],[0,0.13],[165,0.12],[0,0.13],
+      [130,0.12],[0,0.13],[147,0.12],[0,0.13],
+      [130,0.12],[0,0.13],[165,0.12],[0,0.13],
+      [130,0.12],[165,0.12],[0,0.13],[0,0.10],
+    ];
+
+    let t = ctx.currentTime + 0.2;
+    _trainingScheduled = true;
+
+    function scheduleTrainingLoop() {
+      if (!_trainingGain || _musicMuted || !_trainingScheduled) return;
+
+      // Melody — square wave for punchy retro feel
+      let mt = t;
+      melody.forEach(([freq, dur]) => {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = freq;
+        g.gain.setValueAtTime(0, mt);
+        g.gain.linearRampToValueAtTime(0.4, mt + 0.02);
+        g.gain.exponentialRampToValueAtTime(0.001, mt + dur * 0.8);
+        osc.connect(g); g.connect(_trainingGain!);
+        osc.start(mt); osc.stop(mt + dur);
+        mt += dur;
+      });
+
+      // Bass — sine wave kick feel
+      let bt = t;
+      bass.forEach(([freq, dur]) => {
+        if (freq > 0) {
+          const osc = ctx.createOscillator();
+          const g = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq * 1.5, bt);
+          osc.frequency.exponentialRampToValueAtTime(freq, bt + 0.05);
+          g.gain.setValueAtTime(0, bt);
+          g.gain.linearRampToValueAtTime(0.6, bt + 0.01);
+          g.gain.exponentialRampToValueAtTime(0.001, bt + dur * 0.7);
+          osc.connect(g); g.connect(_trainingGain!);
+          osc.start(bt); osc.stop(bt + dur);
+        }
+        bt += dur;
+      });
+
+      const loopDur = melody.reduce((s, [,d]) => s + d, 0);
+      t += loopDur;
+      setTimeout(scheduleTrainingLoop, (loopDur - 0.3) * 1000);
+    }
+
+    scheduleTrainingLoop();
+    _trainingMusicPlaying = true;
+  } catch {}
+}
+
+function stopTrainingMusic() {
+  _trainingScheduled = false;
+  if (!_trainingGain) return;
+  try {
+    const ctx = getAudioCtx();
+    _trainingGain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.5);
+    _trainingMusicPlaying = false;
+    _trainingGain = null;
+  } catch {}
+}
+
 function toggleMusic(): boolean {
   _musicMuted = !_musicMuted;
-  if (_musicMuted) stopBgMusic();
-  else startBgMusic();
+  if (_musicMuted) { stopBgMusic(); stopTrainingMusic(); }
+  else { if (_isTraining) startTrainingMusic(); else startBgMusic(); }
   return !_musicMuted;
 }
 
@@ -378,7 +472,8 @@ setInterval(() => {
   if (!s.loggedIn || !s.userId) return;
   let next: any;
   if (s.sleeping) {
-    _isTraining = false; // can't train while sleeping
+    _isTraining = false;
+    stopTrainingMusic(); // can't train while sleeping
     next = {
       energy: Math.min(100, s.energy + 0.3),
       health: Math.min(100, s.health + 0.04),
@@ -405,7 +500,7 @@ setInterval(() => {
     else if (e < 25 || u < 20) mood = 'tired';
     // Auto-stop training if too hungry or too tired
     const shouldStopTraining = _isTraining && (u < 10 || e < 10);
-    if (shouldStopTraining) _isTraining = false;
+    if (shouldStopTraining) { _isTraining = false; stopTrainingMusic(); startBgMusic(); }
     next = { health: h, hunger: u, energy: e, weight: w, strength: st, mood,
       training: _isTraining };
   }
@@ -501,9 +596,8 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50,
   const tired = mood === 'tired' || health < 40;
   const chubby = weight > 65;
   const skinny = weight < 30;
-  // Muscle levels: 0=none, 1=small, 2=medium, 3=big
-  const muscleLevel = strength > 70 ? 3 : strength > 40 ? 2 : strength > 15 ? 1 : 0;
-  const hasMuscles = muscleLevel > 0;
+  // Fitness level: 0=none, 1=starting, 2=fit, 3=athlete
+  const fitnessLevel = strength > 70 ? 3 : strength > 40 ? 2 : strength > 15 ? 1 : 0;
   const body = sick ? '#c0c0c0' : health > 60 ? '#FFB3C6' : '#f0c0a0';
   const cheek = sick ? '#b0b0b0' : '#ff8fab';
   // Body scale
@@ -515,10 +609,6 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50,
   const bellyRy = chubby ? 34 : skinny ? 20 : 26;
   const cheekRx = chubby ? 14 : 10;
   const cheekRy = chubby ? 10 : 7;
-  // Arm sizes grow with muscle level
-  const armW = [0, 10, 14, 18][muscleLevel];
-  const bicepR = [0, 10, 14, 18][muscleLevel];
-  const forearmW = [0, 7, 10, 13][muscleLevel];
   const [tapAnim, setTapAnim] = useState(false);
   const [tapEmoji, setTapEmoji] = useState('💕');
   const [hearts, setHearts] = useState<{id:number, emoji:string, x:number}[]>([]);
@@ -579,28 +669,20 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50,
             : 'float 3s ease-in-out infinite',
         }}
       >
-        {/* ── MUSCLE ARMS (behind body) ── */}
-        {hasMuscles && (
-          <>
-            {/* Left arm — upper arm + bicep + fist */}
-            <rect x={80 - bodyRx - armW * 1.8} y="88" width={armW} height={armW * 2.2} rx={armW / 2} fill={body} />
-            <ellipse cx={80 - bodyRx - armW * 1.3} cy="86" rx={bicepR} ry={bicepR * 0.85} fill={body} />
-            <rect x={80 - bodyRx - armW * 1.8} y={88 + armW * 2} width={forearmW} height={armW * 1.6} rx={forearmW / 2} fill={body} />
-            {/* Left fist — round paw */}
-            <ellipse cx={80 - bodyRx - armW * 1.4} cy={88 + armW * 3.8} rx={forearmW * 0.9} ry={forearmW * 0.75} fill={body} />
-            {/* Right arm — mirrored */}
-            <rect x={80 + bodyRx + armW * 0.8} y="88" width={armW} height={armW * 2.2} rx={armW / 2} fill={body} />
-            <ellipse cx={80 + bodyRx + armW * 1.3} cy="86" rx={bicepR} ry={bicepR * 0.85} fill={body} />
-            <rect x={80 + bodyRx + armW * 0.8} y={88 + armW * 2} width={forearmW} height={armW * 1.6} rx={forearmW / 2} fill={body} />
-            {/* Right fist */}
-            <ellipse cx={80 + bodyRx + armW * 1.4} cy={88 + armW * 3.8} rx={forearmW * 0.9} ry={forearmW * 0.75} fill={body} />
-            {/* Muscle line on bicep — cute detail */}
-            {muscleLevel >= 2 && <>
-              <path d={`M${80 - bodyRx - armW * 1.7} 90 Q${80 - bodyRx - armW * 0.9} 84 ${80 - bodyRx - armW * 0.2} 90`} stroke="#e8759a" strokeWidth="1.5" fill="none" strokeLinecap="round" opacity="0.6"/>
-              <path d={`M${80 + bodyRx + armW * 0.3} 90 Q${80 + bodyRx + armW * 1.1} 84 ${80 + bodyRx + armW * 1.8} 90`} stroke="#e8759a" strokeWidth="1.5" fill="none" strokeLinecap="round" opacity="0.6"/>
-            </>}
-          </>
-        )}
+        {/* ── FITNESS ACCESSORIES (behind body) ── */}
+        {/* Sneakers — level 2+ */}
+        {fitnessLevel >= 2 && <>
+          {/* Left sneaker */}
+          <ellipse cx="52" cy="148" rx="20" ry="11" fill="#FF6B9D"/>
+          <ellipse cx="52" cy="145" rx="14" ry="7" fill="#ff8fab"/>
+          <rect x="34" y="149" width="36" height="5" rx="2.5" fill="white" opacity="0.55"/>
+          <path d="M37 146 Q52 141 65 146" stroke="white" stroke-width="1.5" fill="none" opacity="0.6" strokeLinecap="round"/>
+          {/* Right sneaker */}
+          <ellipse cx="108" cy="148" rx="20" ry="11" fill="#FF6B9D"/>
+          <ellipse cx="108" cy="145" rx="14" ry="7" fill="#ff8fab"/>
+          <rect x="90" y="149" width="36" height="5" rx="2.5" fill="white" opacity="0.55"/>
+          <path d="M93 146 Q108 141 121 146" stroke="white" stroke-width="1.5" fill="none" opacity="0.6" strokeLinecap="round"/>
+        </>}
         <ellipse cx="40" cy="38" rx="18" ry="22" fill={body} />
         <ellipse cx="120" cy="38" rx="18" ry="22" fill={body} />
         <ellipse cx="40" cy="38" rx="10" ry="14" fill="#ffccd5" />
@@ -723,12 +805,39 @@ function PetFace({ mood, sleeping, health, feedAnim, equipped = [], weight = 50,
             animation: sleeping ? 'none' : 'wag 1.5s ease-in-out infinite',
           }}
         />
-        {/* Sweat drops when training */}
-        {training && <>
-          <ellipse cx="22" cy="55" rx="4" ry="6" fill="#7ed4f7" opacity="0.8"/>
-          <ellipse cx="18" cy="70" rx="3" ry="4.5" fill="#7ed4f7" opacity="0.6"/>
-          <ellipse cx="138" cy="50" rx="3.5" ry="5.5" fill="#7ed4f7" opacity="0.7"/>
-          <ellipse cx="142" cy="65" rx="2.5" ry="4" fill="#7ed4f7" opacity="0.5"/>
+        {/* ── FITNESS OVERLAYS (on top of body) ── */}
+        {/* Headband — level 1+ */}
+        {fitnessLevel >= 1 && !sleeping && (
+          <rect x={80 - headRx + 4} y="56" width={(headRx - 4) * 2} height={fitnessLevel >= 3 ? 14 : 10} rx={fitnessLevel >= 3 ? 7 : 5} fill="#FF6B9D"/>
+        )}
+        {/* Star on headband — level 2+ */}
+        {fitnessLevel >= 2 && !sleeping && (
+          <text x="73" y={fitnessLevel >= 3 ? 68 : 64} fontSize="10" fill="white" fontWeight="800">★</text>
+        )}
+        {/* #1 label — level 3 */}
+        {fitnessLevel >= 3 && !sleeping && (
+          <text x="68" y="68" fontSize="10" fill="white" fontWeight="800">#1</text>
+        )}
+        {/* Medal — level 3 */}
+        {fitnessLevel >= 3 && !sleeping && <>
+          <line x1="80" y1="100" x2="80" y2="118" stroke="#FFD700" strokeWidth="2"/>
+          <circle cx="80" cy="122" r="9" fill="#FFD700"/>
+          <circle cx="80" cy="122" r="6.5" fill="#FFF3A0"/>
+          <text x="76" y="126" fontSize="9" fill="#b8860b" fontWeight="800">★</text>
+        </>}
+        {/* Sparkles — level 3 */}
+        {fitnessLevel >= 3 && !sleeping && <>
+          <text x="4"  y="44" fontSize="13">✨</text>
+          <text x="134" y="42" fontSize="13">✨</text>
+        </>}
+        {/* Sweat drops — training or fitness level 2+ */}
+        {(training || fitnessLevel >= 2) && <>
+          <ellipse cx="18" cy="55" rx="4" ry="6" fill="#7ed4f7" opacity="0.8" transform="rotate(-15 18 55)"/>
+          <ellipse cx="12" cy="70" rx="3" ry="4.5" fill="#7ed4f7" opacity="0.6" transform="rotate(-10 12 70)"/>
+          <ellipse cx="142" cy="50" rx="3.5" ry="5.5" fill="#7ed4f7" opacity="0.75" transform="rotate(15 142 50)"/>
+          {(training || fitnessLevel >= 3) && (
+            <ellipse cx="148" cy="66" rx="2.5" ry="4" fill="#7ed4f7" opacity="0.5" transform="rotate(10 148 66)"/>
+          )}
         </>}
         {/* ── SVG ACCESSORIES ── */}
         {equipped.includes('hat_star') && <>
@@ -3464,6 +3573,8 @@ export default function NutriPet() {
               if (_isTraining) {
                 // Stop training — always allowed
                 _isTraining = false;
+                stopTrainingMusic();
+                startBgMusic();
                 playSfx('wake');
                 track('pet_stop_training');
                 petStore.setState({ training: false });
@@ -3476,6 +3587,8 @@ export default function NutriPet() {
               if (pet.energy < 15) { setBlockedTraining({ reason: 'energy' }); return; }
               // All good — start training
               _isTraining = true;
+              stopBgMusic();
+              startTrainingMusic();
               playSfx('feed_good');
               track('pet_start_training');
               petStore.setState({ training: true });
