@@ -2734,6 +2734,7 @@ export default function NutriPet() {
   const [pending, setPending] = useState(null);
   const [notif, setNotif] = useState(null);
   const [blockedProduct, setBlockedProduct] = useState<{name:string, minutes:number} | null>(null);
+  const [blockedTraining, setBlockedTraining] = useState<{reason:'hunger'|'energy'|'health'|'sleeping'} | null>(null);
   const [showStats, setShowStats] = useState(false);
   const [foodLog, setFoodLog] = useState([]);
   const [unlockedAch, setUnlockedAch] = useState<string[]>([]);
@@ -3460,17 +3461,24 @@ export default function NutriPet() {
           </div>
           <button
             onClick={() => {
-              if (!_isTraining && (pet.hunger < 20 || pet.energy < 20)) {
-                showN('😓 ¡Necesito comer y descansar antes de entrenar!');
+              if (_isTraining) {
+                // Stop training — always allowed
+                _isTraining = false;
+                playSfx('wake');
+                track('pet_stop_training');
+                petStore.setState({ training: false });
                 return;
               }
-              if (!_isTraining && pet.sleeping) {
-                petStore.setState({ sleeping: false });
-              }
-              _isTraining = !_isTraining;
-              playSfx(_isTraining ? 'feed_good' : 'wake');
-              track(_isTraining ? 'pet_start_training' : 'pet_stop_training');
-              petStore.setState({ training: _isTraining });
+              // Check blocks before starting
+              if (pet.health < 15) { setBlockedTraining({ reason: 'health' }); return; }
+              if (pet.sleeping)    { setBlockedTraining({ reason: 'sleeping' }); return; }
+              if (pet.hunger < 15) { setBlockedTraining({ reason: 'hunger' }); return; }
+              if (pet.energy < 15) { setBlockedTraining({ reason: 'energy' }); return; }
+              // All good — start training
+              _isTraining = true;
+              playSfx('feed_good');
+              track('pet_start_training');
+              petStore.setState({ training: true });
             }}
             style={{
               width: 56, height: 30, borderRadius: 99,
@@ -3578,6 +3586,44 @@ export default function NutriPet() {
         />
       )}
       {newAch && <AchievementToast achievement={newAch} onDone={() => setNewAch(null)} />}
+
+      {/* Blocked training modal */}
+      {blockedTraining && (() => {
+        const cfg = {
+          health:   { emoji: '🤒', title: '¡Estoy muy malito!',      body: 'No puedo entrenar cuando estoy tan enfermo. Dame alimentos con Nutri-Score A o B para recuperarme primero.', cta: '¡Voy a comer sano!' },
+          hunger:   { emoji: '😫', title: '¡Tengo mucha hambre!',    body: 'Necesito energía antes de entrenar. Escanéame algo rico y nutritivo primero.', cta: '¡A comer!' },
+          energy:   { emoji: '😴', title: '¡Estoy agotado!',         body: 'No tengo fuerzas para entrenar. Ponme a dormir un rato para recuperar energía.', cta: '¡A dormir!' },
+          sleeping: { emoji: '💤', title: '¡Estoy durmiendo!',       body: 'Despiértame primero antes de ponerme a entrenar. ¡No se puede entrenar dormido!', cta: '¡Despertarme!' },
+        }[blockedTraining.reason];
+        return (
+          <div style={{ position:'fixed', inset:0, zIndex:9999, background:'rgba(0,0,0,0.5)',
+            display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}
+            onClick={() => setBlockedTraining(null)}>
+            <div style={{ background:'white', borderRadius:28, padding:'32px 28px',
+              maxWidth:320, width:'100%', textAlign:'center',
+              boxShadow:'0 20px 60px rgba(0,0,0,0.25)',
+              animation:'achievementPop 0.4s cubic-bezier(.34,1.56,.64,1)' }}
+              onClick={e => e.stopPropagation()}>
+              <div style={{ fontSize:60, marginBottom:12 }}>{cfg.emoji}</div>
+              <h3 style={{ fontSize:20, fontWeight:900, color:'#333', marginBottom:10 }}>{cfg.title}</h3>
+              <p style={{ fontSize:14, color:'#666', lineHeight:1.6, marginBottom:24 }}>{cfg.body}</p>
+              <button onClick={() => {
+                  if (blockedTraining.reason === 'sleeping') {
+                    _isTraining = false;
+                    petStore.setState({ sleeping: false, training: false });
+                  }
+                  setBlockedTraining(null);
+                }}
+                style={{ background:'linear-gradient(135deg,#FF6B9D,#ff8fab)', color:'white',
+                  border:'none', padding:'14px 32px', borderRadius:50, fontSize:15,
+                  fontWeight:800, cursor:'pointer', width:'100%',
+                  boxShadow:'0 4px 16px rgba(255,107,157,0.4)' }}>
+                {cfg.cta}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Blocked food modal */}
       {blockedProduct && (
